@@ -15,10 +15,10 @@ specification and findings log. This README is only an index.
 
 | Piece | State |
 |---|:--:|
-| `.gpak` container (pages, cipher, CRC, MPQ name hash) | solved |
+| `.gpak` container (pages, cipher, CRC, MPQ name hash, wrappers) | solved |
 | Filename recovery (hash → path) | 231 / 483 (48%) |
 | `.gbc` script source (uncompiled GBK DSL, 235 files) | solved |
-| `varbin` entity database (49 blobs, 19,640 records) | 46 / 49 identified |
+| `varbin` entity database (48 blobs, 19,640 records) | 46 / 48 identified |
 | `varbin` numeric field grammar | partial (48% gap coverage) |
 | `.53wf` mesh geometry | solved |
 | `.cmz` skeleton + bind pose | solved |
@@ -61,6 +61,7 @@ Python 3.12+ with `pefile`, `capstone` (disassembly helpers only) and optional
 ```bash
 # archive
 python tools/gpak_extract.py verify  gbox/lm_en/netpak.gpak
+python tools/gpak_extract.py wrap    gbox/lm_en/netpak.gpak   # compression tags
 python tools/gpak_extract.py extract gbox/lm_en/netpak.gpak extracted
 
 # entity database

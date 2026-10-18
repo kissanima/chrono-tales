@@ -56,9 +56,11 @@ Checksum (sub_416D70):
 
 from __future__ import annotations
 
+import io
 import os
 import struct
 import sys
+import zipfile
 
 PAGE = 4096
 HDR_SIZE = 0x54
@@ -250,6 +252,49 @@ class GpakArchive:
             else:
                 bad += 1
         return ok, bad
+
+
+# --------------------------------------------------------------------------- #
+# per-file compression wrapper
+# --------------------------------------------------------------------------- #
+#
+# Some cached payloads are prefixed with a 4-byte compression tag that the
+# client writes itself (`mov dword ptr [eax], 0x602376d7` at 0x53972F) and
+# dispatches on at 0x539979.  See GPAK_FORMAT.md §2.7.
+
+WRAP_ZLIB = 0x602376D7     # minizip/zlib stream follows
+WRAP_CHECKED = 0x8A8E9468  # stored, with an additive integrity fold
+WRAP_STORED = 0xBE119407   # stored verbatim
+
+
+def wrap_tag(blob: bytes) -> int | None:
+    """The compression tag at the head of `blob`, or None if it is a raw file."""
+    if len(blob) < 5:
+        return None
+    v = struct.unpack_from("<I", blob, 0)[0]
+    return v if v in (WRAP_ZLIB, WRAP_CHECKED, WRAP_STORED) else None
+
+
+def unwrap(blob: bytes) -> bytes:
+    """Strip the compression wrapper, inflating it if the tag says so.
+
+    Untagged payloads are returned unchanged, so this is safe to call on every
+    extracted entry.  `WRAP_ZLIB` bodies are *complete single-entry ZIP
+    archives* (entry name `varbin`), not bare deflate streams - the client
+    opens them with minizip from memory.  `WRAP_CHECKED` is treated as stored:
+    its integrity fold is a debug aid, not compression.
+    """
+    tag = wrap_tag(blob)
+    if tag is None:
+        return blob
+    body = blob[4:]
+    if tag == WRAP_ZLIB:
+        with zipfile.ZipFile(io.BytesIO(body)) as zf:
+            names = zf.namelist()
+            if len(names) != 1:
+                raise ValueError(f"expected 1 ZIP entry, found {len(names)}")
+            return zf.read(names[0])
+    return body
 
 
 # --------------------------------------------------------------------------- #

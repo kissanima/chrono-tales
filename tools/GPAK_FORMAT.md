@@ -39,16 +39,27 @@ All integers are little-endian. Page size is **4096**; page *N* lives at `N * 40
 | 0x04 | u32     | header size = `0x54`                                               |         84 |         84 |
 | 0x08 | u32     | version = `0x64` (low 16 bits; high 16 must be 0)                  |        100 |        100 |
 | 0x0C | u32     | reserved = 0                                                       |          0 |          0 |
-| 0x10 | u32     | reserved (this build: `1000 + entryCount`)                         |       1148 |       1336 |
+| 0x10 | u32     | reserved, always `1000 + entryCount`                               |       1148 |       1336 |
 | 0x14 | u32     | **entry count**                                                    |        148 |        336 |
 | 0x18 | u32     | write time (unix)                                                  | 1380183591 | 1380180949 |
 | 0x1C | u32     | **entry capacity** = `(dirPages*4096 − 84) / 536`                  |        152 |        336 |
 | 0x20 | u32     | directory page count                                               |         20 |         44 |
-| 0x24 | u32     | reserved                                                           |       1843 |       2704 |
+| 0x24 | u32     | **used data pages** = `pageCount − dirPages − freePages`           |       1843 |       2704 |
 | 0x28 | u32     | **total pages** = `fileSize >> 12`                                 |       1892 |       2781 |
 | 0x2C | u32     | free page count                                                    |         29 |         33 |
 | 0x30 | u32     | first free page                                                    |       1863 |       2748 |
 | 0x34 | 32 B    | zero                                                               |            |            |
+
+`[0x24]` is a **derived counter, not a source of truth**: it equals
+`pageCount − dirPages − freePages`, and also `firstFreePage − dirPages` because
+the packer allocates data pages contiguously upward from `dirPages` and the free
+list is just the trailing run (`pageCount − firstFreePage == freePages` in both
+archives).  The validator at `0x417210` never reads it, so a stale value would
+go unnoticed — but both shipped archives are consistent.
+
+`[0x10] == 1000 + entryCount` in both archives.  No reader has been found for
+it either; it looks like a schema/version tag that happens to be derived from
+the entry count.
 
 The validator at `0x417210` checks exactly these: magic, `[4]==0x54`,  
 `[8]&0xFFFF==0x64`, `[8]>>16==0`, `[0x28]==fileSize>>12`, and  
@@ -64,13 +75,28 @@ can binary-search (`0x4174B0`).
 |   Off | Type  | Field                                                   |
 | ----: | ----- | ------------------------------------------------------- |
 | 0x000 | u32   | `nameHash` — MPQ `HashString(lower(path), 0)`           |
-| 0x004 | u32   | write time (unix)                                       |
-| 0x008 | u32   | second hash (not `HashString(…,1)`; purpose unknown)    |
+| 0x004 | u32   | archive write time (unix)                               |
+| 0x008 | u32   | **source file time** (unix) — see below                 |
 | 0x00C | u32   | second timestamp                                        |
 | 0x010 | u32   | **size** in bytes                                       |
 | 0x014 | u32   | **start page**                                          |
 | 0x018 | u16   | constant marker `0xFA21`                                |
 | 0x01A | 510 B | **not initialised** — stale heap bytes written verbatim |
+
+`+0x08` is **not a hash**. Earlier notes called it a "second hash" because it
+does not vary with the name; it is a unix timestamp, and it is the only field in
+the archive that preserves the *original* asset dates:
+
+| archive | `+0x08` range | `+0x04` / `+0x0C` range |
+| ------- | ------------- | ----------------------- |
+| netpak  | 2011-03-30 … 2013-09-26 | 2013-09-26, 8 minutes wide |
+| sysnet  | 2011-04-11 … 2013-09-26 | 2013-09-26, 50 minutes wide |
+
+All 484 entries land inside 2005…2014, which a 32-bit hash could not do. The
+hour histogram is a business-day curve once shifted to UTC+8 (sysnet peaks at
+UTC 05:00 = 13:00 CST), and `+0x08 ≤ +0x0C` holds for **every** entry in both
+archives — consistent with a file creation/modification time stored alongside
+the pack time. `+0x04` and `+0x0C` are both pack-run timestamps.
 
 > **There are no filenames in the archive.** The 512-byte tail of each record is the  
 > uninitialised remainder of the 536-byte struct the packer `malloc`'d. The engine  
@@ -142,6 +168,41 @@ def hash_name(s):                       # s = UTF-16 path, type 0
         b = (b + c + ((b << 5) & 0xFFFFFFFF) + a + 3) & 0xFFFFFFFF
     return a
 ```
+
+### 2.7 Per-file compression wrapper — the `D7 76 23 60` tag
+
+Some cached payloads are **not** raw files: they carry a 4-byte compression tag
+written by the client itself. This is not a packer artefact — the writer is at
+`0x53972F`:
+
+```
+call 0x427140                 ; get a destination buffer of size N
+mov  dword ptr [eax], 0x602376d7
+lea  edi, [eax+4]
+rep  movsd / rep movsb        ; memcpy(buf+4, src, N)
+```
+
+and the matching reader dispatches on the first dword at `0x539979`:
+
+| tag | meaning | loader behaviour |
+| --- | ------- | ---------------- |
+| `0x602376D7` (`D7 76 23 60`) | compressed | `0x56E1E0(buf+4, len−4)` → `0x56E080(…, 3, …)`, i.e. minizip/zlib inflate |
+| `0x8A8E9468` | stored + additive check | allocates `len−4`, folds bytes into eight 8-bit accumulators (`acc[i % 8] += data[i]`) |
+| `0xBE119407` | stored verbatim | `memcpy(dst, src+4, len−4)` at `0x5251A0` |
+
+What the shipped data actually contains:
+
+| tag | count | payload |
+| --- | ----: | ------- |
+| `0x602376D7` | 48 | every real `varbin` (a ZIP whose single entry is named `varbin`) |
+| `0xBE119407` | 7 | small `*.bin` blobs (`[07 94 11 be]` + raw stream) |
+| `0x8A8E9468` | 0 | recognised by the loader, never emitted by this build's packer |
+
+So the tag is not "unaccounted for" and it is not on *every* varbin either: the
+49th `*.zip` in the extraction (`c41c9276`) has no tag because it is not a
+varbin at all — its ZIP entry is `jumpdown.caf`, an audio asset. That single
+misfiled blob is also why it appeared in the list of `varbin` streams that
+"desync mid-stream" (§6).
 
 ---
 
@@ -816,9 +877,14 @@ tools/gbc_index.py         script index: graph, classes, interfaces, strings -> 
 ```bash
 python gpak_extract.py verify  gbox/lm_en/netpak.gpak
 python gpak_extract.py list    gbox/lm_en/netpak.gpak
+python gpak_extract.py wrap    gbox/lm_en/netpak.gpak
 python gpak_extract.py names   gbox/lm_en/netpak.gpak gbox/lm_en/sysnet.gpak
 python gpak_extract.py extract gbox/lm_en/netpak.gpak extracted
 ```
+
+`wrap` tallies the compression tags of §2.7; `gpak.unwrap(blob)` strips them
+(and inflates the ZIP ones) and is a no-op on untagged payloads, so it is safe
+to call on every entry.
 
 `extract` writes the real path when known, otherwise  
 `unknown/<nameHash>.<sniffed-ext>`, and always emits `_manifest.json` / `_manifest.csv`  
@@ -891,13 +957,17 @@ strings (8,720 of them `@"…"`), 282 `csvr::call` server-RPC sites, 158 enums.
 
 ## 6. Notes / loose ends
 
-- Header `[0x24]` (`1843` / `2704`) is written but never read by the validator; it equals  
-  `firstFreePage − dirPages` in both files, so it is probably a stale allocation cursor.
-- Directory `+0x08` is *not* `HashString(path, 1)`; it does not change when the name  
-  does, so it is likely a content or source-URL hash.
-- The 4-byte `D7 76 23 60` prefix on every `varbin` ZIP is unaccounted for; `zipfile`
-  reads past it, and the payload itself is intact. Its value is identical on all 49,
-  so it is a constant tag rather than a length or checksum.
+- ~~Header `[0x24]` is a stale allocation cursor.~~ It is the **used data page
+  count**, `pageCount − dirPages − freePages` — see §2.1. Both archives are
+  self-consistent; the validator simply never reads it.
+- ~~Directory `+0x08` is a content or source-URL hash.~~ It is a **unix
+  timestamp** holding the original source file time, 2011-03 … 2013-09, and
+  `+0x08 ≤ +0x0C` on every entry — see §2.2. It was mistaken for a hash because
+  it does not change with the name, which is exactly what a file time does.
+- ~~The 4-byte `D7 76 23 60` prefix on every `varbin` ZIP is unaccounted for.~~
+  It is the client's own compression tag `0x602376D7`, written at `0x53972F` and
+  dispatched at `0x539979` alongside two siblings — see §2.7. It is also not on
+  every ZIP: `c41c9276` has none because it holds `jumpdown.caf`, not a varbin.
 - `varbin` field ids beyond the seven in the table above are still open. Strict gap
   coverage is 48%; the blockers are ids whose gaps are ambiguous under intersection
   (two unknown ids in one gap). Table identification itself succeeded by a different
@@ -905,7 +975,8 @@ strings (8,720 of them `@"…"`), 282 `csvr::call` server-RPC sites, 158 enums.
   `tabedit/*.gbc`, tie-broken by string-vocabulary overlap — giving **46 / 49** blobs
   and 19,640 records. Six blobs (`0580853e`, `66d2c4f3`, `d07f4acc`, `433267c3`,
   `e15a7343`, `c41c9276`) still desync mid-stream; forcing them invents tags, so they
-  are left unexported rather than exported wrong.
+  are left unexported rather than exported wrong. One of the six is now explained
+  away rather than open: `c41c9276` is not a varbin at all — see §2.7.
 - `.cmz` `sbus` skin records are **solved** — see §4.6. The earlier note claiming a
   32-byte / 7×u32 header was **wrong**: a `u8` flag sits between two `u32` fields, so
   every aligned read of that header is off by one. Once unpacked, the blob is the

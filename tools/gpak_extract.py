@@ -4,6 +4,7 @@ Usage:
     python gpak_extract.py list   <archive.gpak>
     python gpak_extract.py verify <archive.gpak>
     python gpak_extract.py names  <archive.gpak> [more...]     build names.json
+    python gpak_extract.py wrap   <archive.gpak>               tally compression wrappers
     python gpak_extract.py extract <archive.gpak> <outdir>     extract everything
 
 Filenames are not stored in the archive.  The directory keeps only a 32-bit
@@ -20,7 +21,8 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gpak import GpakArchive, hash_name, sniff
+from gpak import (GpakArchive, WRAP_CHECKED, WRAP_STORED, WRAP_ZLIB,
+                 hash_name, sniff, wrap_tag)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME_CACHE = os.path.join(HERE, "names.json")
@@ -222,6 +224,28 @@ def cmd_extract(path, outdir):
     return manifest
 
 
+def cmd_wrap(path):
+    """Tally the per-file compression wrappers (GPAK_FORMAT.md §2.7)."""
+    a = GpakArchive(path)
+    tally = {}
+    examples = {}
+    for e in a.entries:
+        data = a.read_entry(e)
+        tag = wrap_tag(data)
+        key = "none" if tag is None else f"{tag:#010x}"
+        tally[key] = tally.get(key, 0) + 1
+        examples.setdefault(key, (e.name_hash, len(data)))
+    label = {f"{WRAP_ZLIB:#010x}": "compressed (ZIP, entry 'varbin')",
+             f"{WRAP_STORED:#010x}": "stored verbatim",
+             f"{WRAP_CHECKED:#010x}": "stored + additive fold",
+             "none": "raw file, no wrapper"}
+    print(f"{path}: {a.entry_count} entries")
+    for k, n in sorted(tally.items(), key=lambda kv: -kv[1]):
+        h, ln = examples[k]
+        print(f"  {k:>12s}  {label.get(k, '?'):<32s} {n:>4d}   "
+              f"e.g. {h:08x} ({ln} B)")
+
+
 def main(argv):
     if len(argv) < 3:
         print(__doc__)
@@ -233,6 +257,8 @@ def main(argv):
         return 0 if cmd_verify(argv[2]) else 1
     elif cmd == "names":
         cmd_names(argv[2:])
+    elif cmd == "wrap":
+        cmd_wrap(argv[2])
     elif cmd == "extract":
         outdir = argv[3] if len(argv) > 3 else os.path.join(HERE, "extracted")
         cmd_extract(argv[2], outdir)
