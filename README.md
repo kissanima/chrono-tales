@@ -10,21 +10,23 @@ zlib 1.1.3/1.1.4, debug paths pointing at `E:\GBox2\src\...`).
 
 **Start here:** [`tools/GPAK_FORMAT.md`](tools/GPAK_FORMAT.md) is the full format
 specification and findings log. This README is only an index.
+[`tools/SYSFILEVER.md`](tools/SYSFILEVER.md) covers the `.var` asset registry.
 
 ## Status
 
 | Piece | State |
 |---|:--:|
 | `.gpak` container (pages, cipher, CRC, MPQ name hash, wrappers) | solved |
-| Filename recovery (hash → path) | 231 / 483 (48%) |
+| Filename recovery (hash → path) | 327 / 483 (68%) |
 | `.gbc` script source (uncompiled GBK DSL, 235 files) | solved |
 | `varbin` entity database (48 blobs, 19,640 records) | 46 / 48 identified |
 | `varbin` numeric field grammar | partial (48% gap coverage) |
 | `.53wf` mesh geometry | solved |
 | `.cmz` skeleton + bind pose | solved |
 | `.cmz` `sbus` skinned geometry + index buffer | solved |
+| `SysFileVer.var` asset registry (9,975 records) | solved |
 | Texture path convention (`model/<GUID>.fw3`, `tex/<GUID>.<ext>`) | solved |
-| Texture GUID → filename | open (table not in the client) |
+| Texture GUID → filename | solved (5,672 pairs, `tools/guid_names.csv`) |
 
 ## Layout
 
@@ -67,6 +69,13 @@ python tools/gpak_extract.py extract gbox/lm_en/netpak.gpak extracted
 # entity database
 python tools/varbin_identify.py          # blob -> game table
 python tools/varbin_tables.py            # -> extracted/tables/*.csv
+
+# asset registry
+python tools/varfile.py stats extracted/netpak/SysFileVer.var
+python tools/varfile.py csv   extracted/netpak/SysFileVer.var -o manifest.csv
+python tools/varfile.py guids extracted/netpak/SysFileVer.var -o guids.csv
+python tools/varfile.py xref  extracted/netpak/SysFileVer.var \
+                              extracted/netpak/_manifest.csv --merge tools/names.json
 
 # scripts
 python tools/gbc_index.py                # -> extracted/gbc_index/index.html

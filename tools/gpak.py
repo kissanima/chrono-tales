@@ -310,7 +310,7 @@ MAGICS = [
     (b"BM", "bmp"),
     (b"DDS ", "dds"),
     (b"ID3", "mp3"),
-    (b"53WF", "53wf"),
+    (b"53WF", "fw3"),          # magic is "53WF", the real extension is .fw3
     (b"CMZ\x00", "cmz"),
 ]
 
