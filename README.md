@@ -28,6 +28,7 @@ specification and findings log. This README is only an index.
 | `SysFileVer.var` asset registry (9,975 records) | solved |
 | Texture path convention (`model/<GUID>.fw3`, `tex/<GUID>.<ext>`) | solved |
 | Texture GUID → filename | solved (5,672 pairs, `tools/guid_names.csv`) |
+| Unified browser over every recovered dataset | `extracted/explorer/index.html` |
 
 ## Layout
 
@@ -36,8 +37,11 @@ gbox/lm_en/          original game files (not committed - 23 MB of binaries)
 extracted/           all derived output (not committed - 88 MB)
   netpak/            archive 1: scripts, entity DB, meshes
   sysnet/            archive 2: UI, tables, textures
+  tables/            42 CSVs, 19,634 rows, real column names
+  maps/              decoded .zmap scenes (JSON + height/layer PNGs)
   models/            decoded meshes, renders, skin JSON
   gbc_index/         browsable script index
+  explorer/          one page over all of the above
 work/                scratch (not committed)
 tools/               the actual work: analysis + decode scripts
 ```
@@ -73,6 +77,7 @@ python tools/varbin_tree.py show 0580853e
 python tools/varbin_identify.py          # blob -> game table
 python tools/varbin_tables.py            # -> extracted/tables/*.csv
 python tools/map_decode.py               # 6 .zmap maps -> extracted/maps/
+python tools/build_explorer.py           # -> extracted/explorer/index.html
 
 # asset registry
 python tools/varfile.py stats extracted/netpak/SysFileVer.var
@@ -95,6 +100,32 @@ python tools/obj_render.py --obj extracted/models/skin_obj \
 ```
 
 All paths are relative to the repo root.
+
+## Browsing it
+
+`extracted/explorer/index.html` is one static page over everything above: the 42
+tables with their real column names, the 9,975 asset records, the six decoded
+maps with height and terrain previews, the mesh and texture galleries, and the
+script index.
+
+It has no build step, no dependencies and no server — **double-click it**. Data
+is delivered as `window.__X = …` through injected `<script>` tags rather than
+`fetch()`, because `fetch` is blocked by CORS on `file://` and script tags are
+not. Each table gets its own `data/t_<id>.js` so the 5.7 MB of CSV is loaded on
+demand instead of up front.
+
+Views are hash-routed, so a specific table is linkable:
+`index.html#t/itemtabedit`, `#maps`, `#assets`, `#scripts`.
+
+Rebuild it after any re-export:
+
+```bash
+python tools/varbin_tables.py && python tools/build_explorer.py
+```
+
+Every figure on the page is read from the generated data (manifests, `_index`
+files, `gbc_index/data.json`) rather than hardcoded, so a stale count is
+impossible.
 
 ## Reading the code
 

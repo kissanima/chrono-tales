@@ -77,6 +77,7 @@ def main():
         s["blobs"].append(name)
 
     index = []
+    written = set()
     for table, s in sorted(shards.items()):
         recs = s["recs"]
         width = s["width"]
@@ -89,6 +90,7 @@ def main():
             fname = os.path.splitext(table)[0] + ".csv"
         title = s["title"]
         path = os.path.join(OUT, fname)
+        written.add(fname)
         ragged = 0
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
@@ -122,8 +124,19 @@ def main():
     with open(os.path.join(OUT, "_index.json"), "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False, indent=1)
 
+    # Identification is one-to-one, so a table can lose its payload between
+    # runs (a corrected tie-break moves the blob elsewhere).  Without this the
+    # orphan CSV survives and every downstream count silently inflates.
+    stale = sorted(f for f in os.listdir(OUT)
+                   if f.endswith(".csv") and f not in written)
+    for f in stale:
+        os.remove(os.path.join(OUT, f))
+        print(f"pruned stale {f}")
+
     total = sum(i["records"] for i in index)
     print(f"\n{len(index)} tables, {total:,} rows -> {OUT}")
+    if stale:
+        print(f"removed {len(stale)} stale csv from a previous identification")
     if ragged_total:
         print(f"warning: {ragged_total} rows did not match their column count")
 

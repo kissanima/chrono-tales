@@ -499,6 +499,15 @@ payload; the other six have no netpak table, so they are either server-only or
 were never populated. The 88- and 2-column payloads have no schema to match at
 all, which is why they land in `unshipped`.
 
+**Export invariant — prune, don't accumulate.** Because assignment is one-to-one,
+correcting a tie-break *moves* a blob and the table that used to own it loses its
+payload entirely. `varbin_tables.py` therefore deletes `*.csv` it did not write
+this run, and `build_explorer.py` does the same for `data/t_*.js`. Without this,
+an orphan from an earlier identification survives forever and silently inflates
+every downstream count — which is exactly what happened when `actiontabedit.csv`
+(a stale 10-row artefact of blob `8898f905`, since correctly assigned to
+`diamondedit`) made the export read 43 tables instead of 42.
+
 The framework also explains what `netpak` is. `tabeditcom.gbc::GetAllData` fetches rows
 over the network:
 
@@ -988,6 +997,32 @@ off their ranges, not from code.
 greyscale height map, a hillshaded relief, the layer map as PNG, and the
 decoration and placement tables as CSV.
 
+### 4.8 `extracted/explorer/` — one page over everything
+
+`tools/build_explorer.py` reads the outputs of every other stage and emits a
+single static page. Nothing is decoded here; it is purely a viewer, and it is
+the fastest way to sanity-check a re-export.
+
+| file | contents |
+|---|---|
+| `index.html` | the whole UI — no external assets, no build step |
+| `data/index.js` | manifest: stats, 42 table entries, 6 map entries |
+| `data/t_<id>.js` | one file per table, loaded on demand |
+| `data/assets.js` | the 9,975 `SysFileVer.var` records |
+
+Two constraints shaped the design:
+
+- **`file://` has no `fetch`.** CORS blocks it, so data ships as
+  `window.__X = …` assignments loaded through dynamically injected `<script>`
+  tags. The page opens by double-clicking with no server of any kind.
+- **5.7 MB of CSV cannot be inlined.** Hence one file per table; the manifest
+  carries only counts, and a table's data is fetched the first time it is opened.
+
+Views are hash-routed (`#t/itemtabedit`, `#maps`, `#assets`, …) so a table is
+linkable. Every figure displayed is computed from the generated data — the two
+`_manifest.json` files, `models/_index.json`, `gbc_index/data.json` — never
+hardcoded, so a count cannot drift from the data it describes.
+
 ---
 
 ## 5. The pipeline
@@ -1008,6 +1043,7 @@ tools/varbin_identify.py   blob -> game table: column count + field-type signatu
                            one-to-one assignment (exact/signature/unshipped/map)
 tools/varbin_tables.py     exports the 42 identified tables to extracted/tables/*.csv
 tools/map_decode.py        the 6 .zmap map payloads -> extracted/maps/ (JSON, PNG, CSV)
+tools/build_explorer.py    one static page over every dataset -> extracted/explorer/
 tools/varbin_solve.py      superseded: the old positional width-table solver
 tools/tabedit_schema.py    extracts all 43 table schemas from tabedit/*.gbc
 tools/table_schemas.json   43 tables: columns, type codes, help text
@@ -1114,6 +1150,7 @@ python varbin_tree.py show 0580853e   # pretty-print one payload as JSON
 python varbin_identify.py    # blob -> game table map -> varbin_identity.json
 python varbin_tables.py      # 42 identified tables -> extracted/tables/*.csv
 python map_decode.py         # 6 .zmap maps -> extracted/maps/
+python build_explorer.py     # everything above -> extracted/explorer/index.html
 python varbin_extract.py keys     # label -> value cross-tab -> varbin_keytab.json
 python varbin_extract.py text     # flat searchable strings per blob
 python varbin_extract.py tokens   # ordered token dump (JSONL) per blob
