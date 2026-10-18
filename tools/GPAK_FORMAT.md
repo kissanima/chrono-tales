@@ -919,6 +919,77 @@ that is not shipped with the client.
 
 ---
 
+### 4.7 The six map payloads — `.zmap` scene documents
+
+Six of the 48 `varbin` payloads are not tables. They are **map files** — the
+`<mapname>.zmap` documents the scene editor writes, caught by the "no table has
+a blob column" rule in §4.2. The layout is not inferred from the data: the
+editor builds it in `ui/video/world.gbc::SaveMapData()` and reads it back in
+`OnEditData()`, and `def.gbc` names every index:
+
+```
+#enum MAP_VER,MAP_HEIGHTDATA,MAP_LAYERDATA,MAP_WIDGETDATA,MAP_DATAEX,MAP_MODELDATA,MAP_END
+```
+
+| field | enum | content |
+|---|---|---|
+| 0 | `MAP_VER` | `100` — `OnEditData` returns `-2` on any other value |
+| 1 | `MAP_HEIGHTDATA` | height field, 12-byte header + 129×258 bytes + u32 trailer |
+| 2 | `MAP_LAYERDATA` | `[100, 256, 512, 393216 bytes]` — 24-bit terrain-type map |
+| 3 | `MAP_WIDGETDATA` | `[map name, decorations…]` |
+| 4 | `MAP_DATAEX` | 6 texture layers + light + path layer + fog |
+| 5 | `MAP_MODELDATA` | fixed model placements, 18 fields each |
+
+`MAP_DATAEX` is indexed by `MAPBASE_LAYER1…LAYER6, MAPBASE_LIGHT,
+MAPBASE_PATHLAYERNO, MAPBASE_FOGCOR, MAPBASE_PATHLAYERNOEX`; each of the six
+layers is `[tex_name, tr_type, leave]` (`MAPLAYER_*`). Every `MAP_MODELDATA` row
+is the 18-name `FIXMODEL_*` enum, so the placement table exports with real
+column names rather than positional ones.
+
+**All six are the same map.** They carry `MAP_VER 100`, the name `w100`, and
+byte-identical 12-byte height headers — six different copies of one scene, each
+with its own terrain. `SaveMapData` writes to
+`RESPATH + OnGetCopyName() + "/" + mapname + ".zmap"`, so the *copy* is what
+distinguishes them, not the map name.
+
+**Height field.** 12-byte header (`u16 2`, `u32 64176`, `u32 49864`, `u16
+0x4461`, identical in all six), then **129 × 258 bytes**, then a u32 trailer
+that is not crc32/adler32/sum. The grid is bytes, not `u16`: 45.3% of aligned
+`u16` pairs have high byte == low byte, where chance would give ~0.4% — the
+pairs are two adjacent cells that happen to be equal.
+
+129 × 258 is **two stacked 129×129 terrain patches**, matching
+`TerrainLodSIZE 256` at half resolution and the layer map's two 256×256 halves.
+Heights are `0..255` over `DEFWORLD_MINZ..DEFWORLD_MAXZ` = `-50..450`, so
+`z = -50 + v * 500 / 255`. Patch 0 is flat plains (values 12..41), patch 1 is
+mountains (0..255).
+
+That second patch nearly fooled a statistics-only read: its entropy is 7.95
+bits/byte and its median adjacent delta is 15, which looks like noise under
+every ordering tested. It is not — it renders as coherent relief, and the high
+entropy is **quantisation dithering**, which only appears where there is a
+gradient. The flat patch is smooth precisely because it has none. Rendering
+settled it where statistics could not.
+
+**Layer map.** `[100, 256, 512, pixels]` with 3 bytes per cell, **interleaved**
+(a planar reading is pure noise: adjacent-byte delta 255 vs 0 interleaved). For
+`w100` it is almost entirely two colours — `ff0000` above the midpoint,
+`000000` below — plus a small painted patch, i.e. the map is barely textured.
+
+**Decorations.** Each is `[kind, res_name, model, texture, 0, n, blob, 0]` where
+the blob is `16 zero bytes + n × 9 bytes`. Each 9-byte instance is four `u16` in
+hundredths plus one `u8`; `x` and `y` decode to plausible world coordinates
+(65..237 × 7..208 for one grass scatter), `z` is **always 0** because the runtime
+derives it (`hz=GetHeightZ(x,y)+v[FIXMODEL_Z]`), the fourth `u16` runs to ~646 so
+it is half-degrees, and the trailing byte sits in 10..70. The last two are read
+off their ranges, not from code.
+
+`tools/map_decode.py` exports all six to `extracted/maps/`: JSON metadata, a
+greyscale height map, a hillshaded relief, the layer map as PNG, and the
+decoration and placement tables as CSV.
+
+---
+
 ## 5. The pipeline
 
 ```
@@ -934,6 +1005,7 @@ tools/varbin_extract.py    entity DB: tokens | text | keys (label->value cross-t
 tools/varbin_identify.py   blob -> game table: column count + field-type signature,
                            one-to-one assignment (exact/signature/unshipped/map)
 tools/varbin_tables.py     exports the 42 identified tables to extracted/tables/*.csv
+tools/map_decode.py        the 6 .zmap map payloads -> extracted/maps/ (JSON, PNG, CSV)
 tools/varbin_solve.py      superseded: the old positional width-table solver
 tools/tabedit_schema.py    extracts all 43 table schemas from tabedit/*.gbc
 tools/table_schemas.json   43 tables: columns, type codes, help text
@@ -1007,6 +1079,7 @@ python varbin_tree.py check  # decode all 48 payloads, assert byte-exact
 python varbin_tree.py show 0580853e   # pretty-print one payload as JSON
 python varbin_identify.py    # blob -> game table map -> varbin_identity.json
 python varbin_tables.py      # 42 identified tables -> extracted/tables/*.csv
+python map_decode.py         # 6 .zmap maps -> extracted/maps/
 python varbin_extract.py keys     # label -> value cross-tab -> varbin_keytab.json
 python varbin_extract.py text     # flat searchable strings per blob
 python varbin_extract.py tokens   # ordered token dump (JSONL) per blob

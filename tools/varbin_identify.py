@@ -26,9 +26,13 @@ Two independent signals, in order of strength:
 
 A **hard structural rule** sits between them: no `tabedit` schema declares a
 blob column (the widget codes are only the ones listed above), so any payload
-whose records contain a `bytes` field is not a table at all.  That is what the
-six map payloads are — they were previously all filed under `forcetabedit`
-because they happened to have six columns.
+whose records contain a `bytes` field is not a table at all.  The six payloads
+this catches are **map files**, not maps-as-blobs: they are `<mapname>.zmap`
+scene documents in the same var layout the scene editor writes (see
+`map_decode.py` and §4.7).  They were previously all filed under `forcetabedit`
+because they happened to have six columns — six *fields*, in fact, which is
+`MAP_VER, MAP_HEIGHTDATA, MAP_LAYERDATA, MAP_WIDGETDATA, MAP_DATAEX,
+MAP_MODELDATA`.
 
 Assignment is **one-to-one**: a table editor owns at most one payload. Without
 that rule the highest-scoring candidate wins for *every* blob that ties on
@@ -173,7 +177,8 @@ def main():
             result[name] = {
                 "records": n_recs, "columns": n_cols, "table": None,
                 "editor_title": "", "confidence": "map",
-                "note": "contains raw blob fields; map payload, not a table",
+                "note": "zmap scene document (MAP_VER 100), not a table; "
+                        "see tools/map_decode.py",
             }
             continue
 

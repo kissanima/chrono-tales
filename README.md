@@ -21,6 +21,7 @@ specification and findings log. This README is only an index.
 | `.gbc` script source (uncompiled GBK DSL, 235 files) | solved |
 | `varbin` entity database (48 blobs, 19,640 records) | solved (byte-exact) |
 | `varbin` blob → game table (42 tables, 19,634 rows exported) | 42 / 48 (37 editors + 5 editor-less) |
+| `varbin` map payloads → `.zmap` scenes (6 maps, height + layers + placements) | solved |
 | `.53wf` mesh geometry | solved |
 | `.cmz` skeleton + bind pose | solved |
 | `.cmz` `sbus` skinned geometry + index buffer | solved |
@@ -71,6 +72,7 @@ python tools/varbin_tree.py check        # decode all 48 payloads, assert byte-e
 python tools/varbin_tree.py show 0580853e
 python tools/varbin_identify.py          # blob -> game table
 python tools/varbin_tables.py            # -> extracted/tables/*.csv
+python tools/map_decode.py               # 6 .zmap maps -> extracted/maps/
 
 # asset registry
 python tools/varfile.py stats extracted/netpak/SysFileVer.var

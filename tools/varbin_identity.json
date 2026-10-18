@@ -5,7 +5,7 @@
   "table": null,
   "editor_title": "",
   "confidence": "map",
-  "note": "contains raw blob fields; map payload, not a table"
+  "note": "zmap scene document (MAP_VER 100), not a table; see tools/map_decode.py"
  },
  "6010fb33": {
   "records": 1,
@@ -13,7 +13,7 @@
   "table": null,
   "editor_title": "",
   "confidence": "map",
-  "note": "contains raw blob fields; map payload, not a table"
+  "note": "zmap scene document (MAP_VER 100), not a table; see tools/map_decode.py"
  },
  "6b45f638": {
   "records": 1,
@@ -21,7 +21,7 @@
   "table": null,
   "editor_title": "",
   "confidence": "map",
-  "note": "contains raw blob fields; map payload, not a table"
+  "note": "zmap scene document (MAP_VER 100), not a table; see tools/map_decode.py"
  },
  "9feba4ac": {
   "records": 1,
@@ -29,7 +29,7 @@
   "table": null,
   "editor_title": "",
   "confidence": "map",
-  "note": "contains raw blob fields; map payload, not a table"
+  "note": "zmap scene document (MAP_VER 100), not a table; see tools/map_decode.py"
  },
  "cc5de97f": {
   "records": 1,
@@ -37,7 +37,7 @@
   "table": null,
   "editor_title": "",
   "confidence": "map",
-  "note": "contains raw blob fields; map payload, not a table"
+  "note": "zmap scene document (MAP_VER 100), not a table; see tools/map_decode.py"
  },
  "da80ff38": {
   "records": 1,
@@ -45,7 +45,7 @@
   "table": null,
   "editor_title": "",
   "confidence": "map",
-  "note": "contains raw blob fields; map payload, not a table"
+  "note": "zmap scene document (MAP_VER 100), not a table; see tools/map_decode.py"
  },
  "0580853e": {
   "records": 1833,
