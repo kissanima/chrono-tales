@@ -1,0 +1,12 @@
+# Normalize line endings on commit/checkout
+* text=auto
+
+# Explicitly binary — never normalize or diff these
+*.gpak binary
+*.gbc  binary
+*.bin  binary
+*.png  binary
+*.jpg  binary
+*.exe  binary
+*.dll  binary
+*.dat  binary

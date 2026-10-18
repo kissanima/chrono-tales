@@ -1,0 +1,440 @@
+{
+ "0580853e": {
+  "records": 1833,
+  "columns": 66,
+  "table_hash": -2143965902,
+  "table": "npctabedit.gbc",
+  "editor_title": "npctabedit.gbc",
+  "confidence": "exact",
+  "column_hits": 1
+ },
+ "09f8db1d": {
+  "records": 262,
+  "columns": 20,
+  "table_hash": -2040673679,
+  "table": "daytaskedit.gbc",
+  "editor_title": "每日成就表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "0e747450": {
+  "records": 136,
+  "columns": 12,
+  "table_hash": -2104838342,
+  "table": "EquipTableEdit.gbc",
+  "editor_title": "装备表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "15fe62ab": {
+  "records": 560,
+  "columns": 32,
+  "table_hash": -2138223400,
+  "table": "maketabedit.gbc",
+  "editor_title": "合成表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "1e806186": {
+  "records": 8,
+  "columns": 6,
+  "table_hash": null,
+  "table": "forcetabedit.gbc",
+  "editor_title": "势力表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "204d427b": {
+  "records": 41,
+  "columns": 12,
+  "table_hash": -2145789215,
+  "table": "EquipTableEdit.gbc",
+  "editor_title": "装备表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "33e159c6": {
+  "records": 329,
+  "columns": 6,
+  "table_hash": -2134219859,
+  "table": "forcetabedit.gbc",
+  "editor_title": "势力表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "37a1742e": {
+  "records": 65,
+  "columns": 15,
+  "table_hash": -2115797940,
+  "table": "gameshopedit.gbc",
+  "editor_title": "游戏商城表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "433267c3": {
+  "records": 1399,
+  "columns": 88,
+  "table_hash": -2141874818,
+  "table": null,
+  "editor_title": "",
+  "confidence": "-",
+  "column_hits": 0
+ },
+ "4514d98f": {
+  "records": 1,
+  "columns": 6,
+  "table_hash": 100,
+  "table": "forcetabedit.gbc",
+  "editor_title": "势力表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "455cc3b0": {
+  "records": 18,
+  "columns": 17,
+  "table_hash": -1965219513,
+  "table": "daliyactivitytabedit.gbc",
+  "editor_title": "每日活动表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "47bf0e8a": {
+  "records": 1298,
+  "columns": 7,
+  "table_hash": null,
+  "table": "droptabedit.gbc",
+  "editor_title": "掉落表编辑",
+  "confidence": "vocab",
+  "column_hits": 1
+ },
+ "486bf1bd": {
+  "records": 128,
+  "columns": 5,
+  "table_hash": null,
+  "table": "pathedit.gbc",
+  "editor_title": "pathedit.gbc",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "4a5475b2": {
+  "records": 12,
+  "columns": 7,
+  "table_hash": null,
+  "table": "droptabedit.gbc",
+  "editor_title": "掉落表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "4ea8321c": {
+  "records": 309,
+  "columns": 11,
+  "table_hash": null,
+  "table": "gifttabedit.gbc",
+  "editor_title": "礼包表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "5218cf47": {
+  "records": 80,
+  "columns": 5,
+  "table_hash": -2073137917,
+  "table": "pathedit.gbc",
+  "editor_title": "pathedit.gbc",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "55b90d45": {
+  "records": 154,
+  "columns": 8,
+  "table_hash": null,
+  "table": "unionbuffedit.gbc",
+  "editor_title": "公会BUFF表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "57defdf0": {
+  "records": 244,
+  "columns": 4,
+  "table_hash": null,
+  "table": "exptabedit.gbc",
+  "editor_title": "经验表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "6010fb33": {
+  "records": 1,
+  "columns": 6,
+  "table_hash": 100,
+  "table": "forcetabedit.gbc",
+  "editor_title": "势力表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "60792c4a": {
+  "records": 331,
+  "columns": 8,
+  "table_hash": -2134062197,
+  "table": "unionbuffedit.gbc",
+  "editor_title": "公会BUFF表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "615fbfd5": {
+  "records": 20,
+  "columns": 23,
+  "table_hash": -1874822625,
+  "table": "daliytabedit.gbc",
+  "editor_title": "日常活动表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "66d2c4f3": {
+  "records": 735,
+  "columns": 3,
+  "table_hash": null,
+  "table": "paramtabedit.gbc",
+  "editor_title": "参数表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "6a64e3da": {
+  "records": 255,
+  "columns": 18,
+  "table_hash": -2128542964,
+  "table": "MapAreaDlg.gbc",
+  "editor_title": "MapAreaDlg.gbc",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "6b1f6475": {
+  "records": 1020,
+  "columns": 37,
+  "table_hash": -2146207656,
+  "table": "bufftabedit.gbc",
+  "editor_title": "bufftabedit.gbc",
+  "confidence": "exact",
+  "column_hits": 1
+ },
+ "6b45f638": {
+  "records": 1,
+  "columns": 6,
+  "table_hash": 100,
+  "table": "forcetabedit.gbc",
+  "editor_title": "势力表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "6fb967a3": {
+  "records": 5,
+  "columns": 14,
+  "table_hash": null,
+  "table": "tasktabedit.gbc",
+  "editor_title": "任务表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "8664461b": {
+  "records": 924,
+  "columns": 24,
+  "table_hash": -2147259051,
+  "table": "effectabedit.gbc",
+  "editor_title": "effectabedit.gbc",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "87d142c2": {
+  "records": 4122,
+  "columns": 52,
+  "table_hash": -2141698225,
+  "table": "itemtabedit.gbc",
+  "editor_title": "物品表编辑",
+  "confidence": "exact",
+  "column_hits": 1
+ },
+ "8898f905": {
+  "records": 10,
+  "columns": 16,
+  "table_hash": -1873904773,
+  "table": "actiontabedit.gbc",
+  "editor_title": "actiontabedit.gbc",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "8d861de9": {
+  "records": 159,
+  "columns": 15,
+  "table_hash": -2100280568,
+  "table": "gameshopedit.gbc",
+  "editor_title": "游戏商城表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "93c34746": {
+  "records": 49,
+  "columns": 25,
+  "table_hash": null,
+  "table": "shoptabedit.gbc",
+  "editor_title": "掉落表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "96c9244b": {
+  "records": 12,
+  "columns": 15,
+  "table_hash": null,
+  "table": "gameshopedit.gbc",
+  "editor_title": "游戏商城表编辑",
+  "confidence": "vocab",
+  "column_hits": 1
+ },
+ "9f9048cf": {
+  "records": 46,
+  "columns": 29,
+  "table_hash": -2128542964,
+  "table": "worldtabedit.gbc",
+  "editor_title": "场景表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "9feba4ac": {
+  "records": 1,
+  "columns": 6,
+  "table_hash": 100,
+  "table": "forcetabedit.gbc",
+  "editor_title": "势力表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "af3407ec": {
+  "records": 12,
+  "columns": 6,
+  "table_hash": null,
+  "table": "forcetabedit.gbc",
+  "editor_title": "势力表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "b0a40a84": {
+  "records": 252,
+  "columns": 5,
+  "table_hash": null,
+  "table": "pathedit.gbc",
+  "editor_title": "pathedit.gbc",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "c3eba311": {
+  "records": 6,
+  "columns": 39,
+  "table_hash": -1820254933,
+  "table": "passtabedit.gbc",
+  "editor_title": "passtabedit.gbc",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "c41c9276": {
+  "records": null,
+  "columns": null,
+  "table": null,
+  "note": "no valid header"
+ },
+ "cbc16f9c": {
+  "records": 213,
+  "columns": 12,
+  "table_hash": -2088756050,
+  "table": "EquipTableEdit.gbc",
+  "editor_title": "装备表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "cc5de97f": {
+  "records": 1,
+  "columns": 6,
+  "table_hash": 100,
+  "table": "forcetabedit.gbc",
+  "editor_title": "势力表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "d07f4acc": {
+  "records": 27,
+  "columns": 27,
+  "table_hash": -1983841923,
+  "table": "peteditlist.gbc",
+  "editor_title": "宠物表编辑",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "d483aad3": {
+  "records": 177,
+  "columns": 12,
+  "table_hash": -2140638572,
+  "table": "EquipTableEdit.gbc",
+  "editor_title": "装备表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "da80ff38": {
+  "records": 1,
+  "columns": 6,
+  "table_hash": 100,
+  "table": "forcetabedit.gbc",
+  "editor_title": "势力表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "dd447626": {
+  "records": 26,
+  "columns": 12,
+  "table_hash": -2010245321,
+  "table": "EquipTableEdit.gbc",
+  "editor_title": "装备表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "e15a7343": {
+  "records": 1982,
+  "columns": 2,
+  "table_hash": null,
+  "table": null,
+  "editor_title": "",
+  "confidence": "-",
+  "column_hits": 0
+ },
+ "fcd47eb6": {
+  "records": 7,
+  "columns": 9,
+  "table_hash": -1949029753,
+  "table": "runetabedit.gbc",
+  "editor_title": "VIP表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ },
+ "fcef78c4": {
+  "records": 1157,
+  "columns": 22,
+  "table_hash": -2145130802,
+  "table": "npcmaketabedit.gbc",
+  "editor_title": "npcmaketabedit.gbc",
+  "confidence": "exact",
+  "column_hits": 0
+ },
+ "fcf45131": {
+  "records": 1193,
+  "columns": 57,
+  "table_hash": -2142740000,
+  "table": "skilltabedit.gbc",
+  "editor_title": "skilltabedit.gbc",
+  "confidence": "exact",
+  "column_hits": 2
+ },
+ "fe4857b1": {
+  "records": 18,
+  "columns": 9,
+  "table_hash": -1284018624,
+  "table": "runetabedit.gbc",
+  "editor_title": "VIP表编辑",
+  "confidence": "tie",
+  "column_hits": 0
+ }
+}

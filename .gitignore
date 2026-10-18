@@ -1,0 +1,28 @@
+# Derived output — regenerable by running tools/*.py
+extracted/
+work/
+
+# Original game install (large binary pak files)
+gbox/
+
+# Windows installer leftovers
+unins000.*
+
+# Agent workspace state (local only)
+.workbuddy-ai/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# OS / editor junk
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/
+*.swp
