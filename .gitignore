@@ -8,6 +8,10 @@ gbox/
 # Windows installer leftovers
 unins000.*
 
+# Bundled game runtime plugins (third-party binaries)
+gboxwebruner.dll
+npgboxruner.dll
+
 # Agent workspace state (local only)
 .workbuddy-ai/
 
