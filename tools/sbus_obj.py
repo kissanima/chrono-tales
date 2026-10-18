@@ -37,9 +37,13 @@ def part_names(d, off, end, n):
             raw = d[i + 4:i + 4 + ln]
             if all(c == 0 or 32 <= c < 0x80 or c >= 0x81 for c in raw):
                 try:
-                    names.append(gbk(raw))
-                    i += 4 + ln
-                    continue
+                    s = gbk(raw)
+                    # reject 1-char scans: real part names are multi-byte
+                    # GBK labels like 人类_男_战士7档_衣服_M or b_faxing00
+                    if len(s) >= 3:
+                        names.append(s)
+                        i += 4 + ln
+                        continue
                 except UnicodeDecodeError:
                     pass
         i += 1
