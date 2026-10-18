@@ -600,69 +600,110 @@ single texture via the varbin link or visual identification of the mesh.
 `obj_render.py --texmap extracted/models/texmap.json` → `png_tex/*.png` and
 `textured_sheet.png`; `tex_gallery.py` → `textures.html`.
 
-### 4.6 `.cmz` `sbus` skin-weight records (container decoded)
+### 4.6 `.cmz` `sbus` skin records — **SOLVED**
 
-> **Status: container + per-part structure solved; exact per-vertex encoding
-> still open (needs the consumer routine).**
+> **Status: per-vertex mesh + rigid skin fully decoded.** The blob is the
+> skinned geometry itself (positions, normals, UVs, bone weights); the matching
+> `.fw3` (`.53wf`) is just a re-export without skinning.
 
-A `.cmz` carries the skeleton, not the mesh; the mesh is the matching `.53wf`
-(referenced by the part name through the varbin name table, e.g.
-`人类_男_战士7档_衣服_M` → a `model/<GUID>.fw3`).  The per-part **skin weights**
-that bind mesh vertices to bones live in the `MESH` chunk as a sequence of
-`sbus` records (`sbus` is the byte-reversed store of the tag `subs`; the four
-outer chunk tags are likewise byte-reversed: `leks`=skel, `HSEM`=MESH,
-`1PAM`=MAP1, `.DNE`=END.).
+The `sbus` blob is a packed, **variable-length** record: a small header
+followed by `n_verts` vertex records and an index buffer. The packed
+encoding is critical — a `u8` flag sits between two `u32` fields, so any
+4-byte-aligned parse is misaligned by one.  Layout recovered by reading the
+per-record parser at VA `0x59A640` in `gbox/lm_en/chronotales.exe`
+(called from `0x59A2E0`, which loops over parts with `stride 0x88 = 136`).
 
-**Chunk structure** (verified against the loader at `0x199307` in
-`gbox/lm_en/chronotales.exe`):
-
-```
-u32 n_parts
-[ per part ]  name_len:u32 | name:GBK+NUL | u32 record_count | sbus blob
-```
-
-Each `sbus` blob begins with a 32-byte header, then variable-length payload:
+**Header** (offset 0 is the `sbus` tag):
 
 ```
-sbus             4 bytes  tag
-u32 part_index   0..n_parts-1  (mech 2682c5d5 has 5 parts, indices 0..4)
-u32 0
-u32 A             per-part constant (53761 / 307457 / 92673 / 565249 ...)
-u32 B             per-part constant (72704 / 164864 / 109568 / 330752 ...)
-u32 0
-u32 0
-u32 bonecap      256 for mounts/mechs, 512 for humans  (= max-bone class,
-                  i.e. an 8-bit bone index space; the mech rig has 43 bones,
-                  human rigs 109–119)
-[ payload ]      variable, u8/u16 mixture with sentinels 0x7fff / 0xffff
+ 0  u32  'sbus'
+ 4  u32  part_index
+ 8  u32  0
+12  u8   1                      <- breaks 4-byte alignment
+13  u32  n_verts
+17  u32  n_faces                (= number of triangles in the index buffer)
+21  u32  unknown                (later stored to struct+0x10; A=0 in all 9)
+25  u32  unknown                (count of an 8-byte-element side array; 0)
+29  u32  n_uv_sets              (0 or 1 in the shipped files)
+33  u8   wide_influence_flag    0 -> n_influences is u8; != 0 -> u16
+34  f32  base_x, step_x, base_y, step_y, base_z, step_z    (6 floats)
 ```
 
-The loader allocates an in-memory array of `n_parts × 136-byte` part structs
-(the `0x88` = 136 stride shows up at `0x19937e` `push 0x88` and the loop at
-`0x199654` `add edx, 0x88`; the record indexer `0x19a2b0` is `base + idx*136`).
-The 136-byte in-memory struct holds the part name, a few flag bytes (read one
-at a time via `0xa1a40`/`0xa1a00`), and a pointer to the variable skin blob
-at offset `+0x6c` (the blob itself is slurped by the `memcpy`-like reader
-`0x199c30`).  Each part also has a sub-array of 136-byte records indexed the
-same way (the loop at `0x199cc0` walks `[part+0x5c]` parts × `[struct+4]`
-sub-records, calling `0x19b310(...,0x19)` per record).
+`step` and `base` are the **un-scaled** floats written to the file; the
+engine multiplies both by `0.01` (the same constant at VA `0x6D0738` that
+the `.53wf` vertex decoder uses).
 
-**Payload format — open problem.**  Every blob's payload is an integer stream
-(systematic `f32` scans are all ~0).  It is **not** a naive fixed-stride
-`(bone:u16, weight:u16)` stream: no group size 1–8 × field position yields a
-field whose values are all valid bone indices (< bonecap), and no clean
-`bone/weight` split appears at the u8 or u16 level either.  Sentinel values
-`0x7fff` (32767) and `0xffff`/`0xfffe` recur, and `0x2710` (10000) appears
-repeatedly.  The blob is consumed opaquely (pointer stored, applied later when
-the `.53wf` vertices are skinned), so the exact per-vertex (bone, weight)
-encoding almost certainly lives in the mesh/skinning consumer, not the `.cmz`
-parser — decoding it requires locating that consumer (the routine that reads
-`struct+0x6c` and blends vertices by bone matrix).
+**Per-vertex record** (exactly `12 + 4*n_uv_sets + (1 or 2) + 3*n_influences`
+bytes; the shipped files are all rigid 1-bone so each record is **20 bytes**):
 
-`cmz.py` now extracts every part's `sbus` blob (header + raw bytes) into
-`extracted/models/cmz/<hash>.json` under `mesh[].blob_len / part_index / A / B /
-bonecap`; `tools/solve_sbus.py` is the brute-force field/stride checker used to
-rule out the naive encodings.
+```
+u16 px, py, pz     pos = u16 * step + base, with step,base * 0.01
+u16 nx, ny, nz     nrm = u16 * 3.0518509447574615e-05 - 1.0   (VA 0x6D073C, 0x6CEC4C)
+[n_uv_sets x (u16,u16)]  uv = u16 * 3.05185e-5   (the first set is kept)
+u8/u16 n            number of bone influences (1 in every shipped file)
+n x (u8 bone, u16 weight)   weight = u16 * 1e-4   (VA 0x6D457C, 10000 = 1.0)
+```
+
+Only the first four influences per vertex are kept by the engine
+(`cmp esi,4; jge 0x59acaa`), and weights of 0 or 1 are dropped
+(`cmp ax,1; jbe`), so a lone weight of 1 means "no influence" and not
+"1%".
+
+**Index buffer** — `n_faces` triangles immediately after the vertex
+records.  The engine checks `cmp n_verts, 0x400 (1024)` at `0x59AFB8` and
+chooses:
+
+```
+n_verts <  1024  :  one u32 per triangle, indices packed as
+                     (i2 << 20) | (i1 << 10) | i0
+n_verts >= 1024  :  three u16 per triangle
+```
+
+**Validation** (`tools/sbus_decode.py`, 9/9 files, 14/14 parts):
+
+- every decoded bone index is in `[0, n_bones)`.
+- weight sum is exactly 1.000 for every vertex.
+- every decoded normal is unit length (`|n| = 1.000`).
+- the part-name strings recovered by walking the length-prefixed GBK
+  records before each `sbus` match the varbin decoration table:
+  `机甲摩托_前轮`, `b_faxing00`, `人类_男_战士7档_衣服_M`,
+  `人类_男_默认_鞋子_M`, `人类_男_战士7档_手套_M`,
+  `人类_男_战士7档_护臂_M`, `人类_男_战士7档_护腿_M`, `人类_男_脸型09_M`.
+
+| file      | parts | verts | faces |
+|-----------|------:|------:|------:|
+| 2682c5d5  | 5     | 4191  | 2932  | mech body + 4 rigid parts
+| 482f1708  | 1     | 137   | 172   | hairstyle
+| 5995da06  | 1     | 326   | 446   | tier-7 clothes
+| 5e493068  | 1     | 140   | 196   | default shoes
+| 72b5ee25  | 1     | 590   | 592   | tier-7 gloves
+| a7b5710e  | 1     | 100   | 146   | tier-7 arm guards
+| d1500c0c  | 2     | 581   | 694   | tier-7 leg guards
+| f2d259a2  | 2     | 376   | 582   | face type 09
+| ff725ba4  | 1     | 320   | 386   | tier-7 shoes
+
+`tools/sbus_obj.py` exports each file to a single multi-group OBJ
+(Z up, metres) and `tools/obj_render.py --up z` produces a recognisable
+contact sheet of all 9 files at `extracted/models/skin_sheet.png`.
+
+**The 136-byte in-memory part struct** (stride confirmed at the indexer
+`0x19A2B0 = base + idx*0x88`) is filled by the parser and then consumed
+opaquely by the animation system.  Field meanings (offsets in the 136-byte
+struct):
+
+```
++0x00  pointer  per-vertex 60-byte array (pos+normal+uv padded out)
++0x04  u32      n_verts
++0x08  u32      n_faces
++0x0c  u32      part_index
++0x10  u32      unknown (= F6 from the header)
++0x14  char[]   source-stream handle (left in by the parser)
++0x18  ...
++0x24  ptr      side array of 8-byte elements (count = F7)
++0x54..0x5B    bounding box min (3 floats)
++0x60..0x67    bounding box max (3 floats)
++0x6c          pointer to the variable-length source blob (unread on this side)
+```
 
 ---
 
