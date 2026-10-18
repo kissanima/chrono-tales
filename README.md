@@ -94,6 +94,7 @@ sbus_dump.py      hexdump the header and payload
 sbus_fields.py    score every offset as f32 / u16   -> not raw coordinates
 sbus_grid.py      lay the payload out on the grid   -> weight field at +0
 sbus_decode.py    the decoder (from VA 0x59A640 in the client)
+sbus_census.py    which header fields vary, which are constant
 sbus_obj.py       OBJ export
 sbus_validate.py  four independent checks that the decode is right
 ```

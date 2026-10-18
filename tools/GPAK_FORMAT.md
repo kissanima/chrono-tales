@@ -613,25 +613,41 @@ encoding is critical — a `u8` flag sits between two `u32` fields, so any
 per-record parser at VA `0x59A640` in `gbox/lm_en/chronotales.exe`
 (called from `0x59A2E0`, which loops over parts with `stride 0x88 = 136`).
 
-**Header** (offset 0 is the `sbus` tag):
+**Header** (offset 0 is the `sbus` tag). The loader first reads a *marker*
+word at offset 8 and branches on it, so two variants exist:
 
 ```
  0  u32  'sbus'
  4  u32  part_index
- 8  u32  0
-12  u8   1                      <- breaks 4-byte alignment
+ 8  u32  marker
+```
+
+`marker == 0` — **variant 2**, used by all 15 shipped parts:
+
+```
+12  u8   1                      <- flag; breaks 4-byte alignment
 13  u32  n_verts
 17  u32  n_faces                (= number of triangles in the index buffer)
-21  u32  unknown                (later stored to struct+0x10; A=0 in all 9)
-25  u32  unknown                (count of an 8-byte-element side array; 0)
-29  u32  n_uv_sets              (0 or 1 in the shipped files)
+21  u32  unknown                (stored to struct+0x10; 0 in all 15 parts)
+25  u32  unknown                (element count of the 8-byte container at
+                                 struct+0x24; 0 in all 15 parts)
+29  u32  n_uv_sets              (1 or 2 in the shipped files)
 33  u8   wide_influence_flag    0 -> n_influences is u8; != 0 -> u16
 34  f32  base_x, step_x, base_y, step_y, base_z, step_z    (6 floats)
 ```
 
+`marker != 0` — **variant 1**, not present in this build. The marker word *is*
+`n_verts`, there is no flag byte and no `wide` byte, and everything from
+`n_faces` onward follows directly at offset 12. This is why the original
+"seven u32 header" reading was off by one: the flag byte is conditional, and
+it only exists in variant 2.
+
 `step` and `base` are the **un-scaled** floats written to the file; the
 engine multiplies both by `0.01` (the same constant at VA `0x6D0738` that
-the `.53wf` vertex decoder uses).
+the `.53wf` vertex decoder uses). The six floats are stored in the order
+`base_x, step_x, base_y, step_y, base_z, step_z` — confirmed by the six
+sequential reads at `0x59A957`..`0x59A9BC` and the matching
+`fild / fmul / fadd` triples at `0x59AA39`, `0x59AA5E`, `0x59AA81`.
 
 **Per-vertex record** (exactly `12 + 4*n_uv_sets + (1 or 2) + 3*n_influences`
 bytes; the shipped files are all rigid 1-bone so each record is **20 bytes**):
@@ -646,10 +662,25 @@ u8/u16 n            number of bone influences (1 in every shipped file)
 n x (u8 bone, u16 weight)   weight = u16 * 1e-4   (VA 0x6D457C, 10000 = 1.0)
 ```
 
-Only the first four influences per vertex are kept by the engine
-(`cmp esi,4; jge 0x59acaa`), and weights of 0 or 1 are dropped
-(`cmp ax,1; jbe`), so a lone weight of 1 means "no influence" and not
-"1%".
+Only the **first** UV set is retained (`test edi,edi; jne` at `0x59ABDC`) but
+every set is consumed. Two shipped parts (`482f1708`, `d1500c0c` part 1)
+declare `n_uv_sets == 2`; in both, the second pair is **byte-identical** to
+the first, so discarding it loses nothing.
+
+Influence handling splits at four:
+
+```
+n <= 4  (0x59ADA4)  every pair stored; a raw weight of 0 trips a debug
+                    assert but the value is still written
+n >  4  (0x59AC4C)  every pair still consumed from the stream, but only the
+                    first four with a raw weight > 1 (> 1e-4) are kept
+```
+
+`cmp ax,1; jbe` is an **unsigned** comparison against the raw u16, so it
+drops raw 0 and raw 1 (0.0 and 0.0001) — it is near-zero culling, not a
+"weight of 1 means no influence" marker. The `n > 4` path additionally
+accumulates a running weight total at `[esp+0x64]` that nothing ever reads:
+dead bookkeeping from a normalisation step that was removed.
 
 **Index buffer** — `n_faces` triangles immediately after the vertex
 records.  The engine checks `cmp n_verts, 0x400 (1024)` at `0x59AFB8` and
@@ -661,16 +692,42 @@ n_verts <  1024  :  one u32 per triangle, indices packed as
 n_verts >= 1024  :  three u16 per triangle
 ```
 
-**Validation** (`tools/sbus_decode.py`, 9/9 files, 14/14 parts):
+**Validation** (`tools/sbus_validate.py --strict`, 9/9 files, 15/15 parts):
 
 - every decoded bone index is in `[0, n_bones)`.
 - weight sum is exactly 1.000 for every vertex.
 - every decoded normal is unit length (`|n| = 1.000`).
-- the part-name strings recovered by walking the length-prefixed GBK
-  records before each `sbus` match the varbin decoration table:
-  `机甲摩托_前轮`, `b_faxing00`, `人类_男_战士7档_衣服_M`,
-  `人类_男_默认_鞋子_M`, `人类_男_战士7档_手套_M`,
-  `人类_男_战士7档_护臂_M`, `人类_男_战士7档_护腿_M`, `人类_男_脸型09_M`.
+- every triangle index is in `[0, n_verts)`.
+- the stream is **fully consumed** on all 15 parts. Where bytes remain
+  between one `sbus` blob and the next marker they are not mesh data at all:
+  they are the *next* part's `u32 name_len | GBK name | u32 record_count`
+  header (22–33 bytes), which is what pins the MESH layout down.
+
+**Part names** are recovered deterministically rather than by scanning.
+MESH stores each part as
+
+```
+u32 name_len | GBK name (NUL terminated) | u32 record_count | sbus blob
+```
+
+so the label sits immediately in front of its own blob. `record_count` is the
+number of `sbus` records in the part and is `1` everywhere, which is the
+sanity check that keeps the backward walk out of the previous part's vertex
+stream. `tools/sbus_decode.py:part_name()` implements it; all 15 parts resolve
+with no ambiguity, including `机甲摩托_前轮` (front wheel), which the earlier
+forward scan could not reach:
+
+| file      | part | name                        |
+|-----------|-----:|-----------------------------|
+| 2682c5d5  | 0–4  | 机甲摩托_前轮 / 后轮 / 车身 / 车头 / 轮眉架子 |
+| 482f1708  | 0    | b_faxing00                  |
+| 5995da06  | 0    | 人类_男_战士7档_衣服_M         |
+| 5e493068  | 0    | 人类_男_默认_鞋子_M            |
+| 72b5ee25  | 0    | 人类_男_战士7档_手套_M         |
+| a7b5710e  | 0    | 人类_男_战士7档_护臂_M         |
+| d1500c0c  | 0–1  | 人类_男_战士7档_护腿_M / 护腿01_M |
+| f2d259a2  | 0–1  | 人类_男_脸型09_M / 眼珠03_M     |
+| ff725ba4  | 0    | 人类_男_战士7档_鞋子_M         |
 
 | file      | parts | verts | faces |
 |-----------|------:|------:|------:|
@@ -694,18 +751,37 @@ opaquely by the animation system.  Field meanings (offsets in the 136-byte
 struct):
 
 ```
-+0x00  pointer  per-vertex 60-byte array (pos+normal+uv padded out)
++0x00  ptr      per-vertex array, 60 bytes each (see below)
 +0x04  u32      n_verts
 +0x08  u32      n_faces
 +0x0c  u32      part_index
-+0x10  u32      unknown (= F6 from the header)
-+0x14  char[]   source-stream handle (left in by the parser)
-+0x18  ...
-+0x24  ptr      side array of 8-byte elements (count = F7)
-+0x54..0x5B    bounding box min (3 floats)
-+0x60..0x67    bounding box max (3 floats)
-+0x6c          pointer to the variable-length source blob (unread on this side)
++0x10  u32      unknown (= header field at +21)
++0x14  char[]   triangle indices, n_faces * 3 u16 (resized at 0x59AF7C)
++0x24  object   container with a vtable, constructed as (stride 8,
+                count = header field at +25) at 0x59A93A; its destructor at
+                0x58F300 unlinks it from a global list at 0x79BB58
++0x54..0x5F    AABB min (3 floats), seeded to +5e6 at 0x59A6C1
++0x60..0x6B    AABB max (3 floats), seeded to -5e6 at 0x59A6DA
++0x7c  ptr[]    array of child part objects, +0x84 = count
 ```
+
+The per-vertex record is 60 bytes (`n_verts * 0x3C` allocated at `0x59A917`):
+
+```
++0x00  f32 x, y, z
++0x0c  f32 nx, ny, nz
++0x18  u32 n_influences
++0x1c  u32 bone[4] / f32 weight[4] interleaved, 8 bytes per pair
+       (copied in one `rep movsd` of 8 dwords at 0x59AF34)
+```
+
+The two residual unknowns (`+21` and `+25`) are **0 in all 15 shipped
+parts**, so their semantics cannot be recovered from data. What is proven:
+`+21` is copied verbatim to struct `+0x10`, and `+25` is the element count
+of the 8-byte container at struct `+0x24`. There is also no writer — the
+`sbus` magic `0x73756273` occurs exactly **once** in `chronotales.exe` (the
+compare at `0x59A6FF`), so the `.cmz` files were produced by an offline tool
+that is not shipped with the client.
 
 ---
 
@@ -835,11 +911,17 @@ strings (8,720 of them `@"…"`), 282 `csvr::call` server-RPC sites, 158 enums.
   every aligned read of that header is off by one. Once unpacked, the blob is the
   skinned geometry itself (positions, normals, UVs, weights, index buffer), which is
   why it looked like an opaque integer blob. Two header fields remain unexplained:
-  `+21` (stored to struct `+0x10`, zero in all 9 files) and `+25` (count of an
-  8-byte-element side array, also zero). The `wide_influence` (u16 count) and
-  `n > 4` influences paths exist in the parser but are never exercised — every
-  shipped part is rigid, one bone per vertex — so the u16-bone variant implied by
-  the 512/1024 bonecaps is untested here.
+  `+21` (stored to struct `+0x10`) and `+25` (element count of an 8-byte container at
+  struct `+0x24`). Both are **0 in all 15 shipped parts**, so they are not recoverable
+  from data, and there is no writer to read them off: the `sbus` magic occurs exactly
+  once in `chronotales.exe` (the compare at `0x59A6FF`), so `.cmz` is produced by an
+  offline tool that is not shipped. The `wide_influence` (u16 count) and `n > 4`
+  influence paths exist in the parser but are never exercised — every shipped part is
+  rigid, one bone per vertex — so the u16-bone variant implied by the 512/1024
+  bonecaps is untested here. Two structural facts came out of the disassembly and are
+  implemented in `sbus_decode.py`: a **variant-1 header** exists for `marker != 0`
+  (no flag byte, no `wide` byte, marker *is* `n_verts`), and the `n > 4` path consumes
+  every pair but stores only the first four above a raw weight of 1.
   `sbus_validate.py --strict` is the regression test: bone range, weight sum == 1,
   unit normals and index range across all 9 files (6761 verts, 6146 tris).
 - `m_szType` codes are **editor widget types**, confirmed from the `switch` in

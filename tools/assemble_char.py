@@ -24,8 +24,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from sbus_decode import chunk_bounds, blobs, decode  # noqa: E402
-from sbus_obj import part_names  # noqa: E402
+from sbus_decode import chunk_bounds, decode, part_name  # noqa: E402
 
 HUMAN = ["5995da06", "5e493068", "72b5ee25", "a7b5710e",
          "d1500c0c", "f2d259a2", "ff725ba4"]
@@ -40,12 +39,21 @@ def load_parts(stem):
     if not mesh:
         return []
     off, _, end = mesh
-    raw = blobs(d, off + 8, end)
-    parts = [q for q in (decode(b) for b in raw) if q]
-    names = part_names(d, off, end, len(parts))
-    for q, nm in zip(parts, names):
-        q["name"] = nm
+    marks, i = [], off + 8
+    while True:
+        j = d.find(b"sbus", i, end)
+        if j < 0:
+            break
+        marks.append(j)
+        i = j + 1
+    parts = []
+    for k, m in enumerate(marks):
+        q = decode(d[m:marks[k + 1] if k + 1 < len(marks) else end])
+        if not q:
+            continue
+        q["name"] = part_name(d, m) or f"part{len(parts)}"
         q["stem"] = stem
+        parts.append(q)
     return parts
 
 

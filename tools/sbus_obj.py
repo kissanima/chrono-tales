@@ -16,38 +16,22 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from sbus_decode import chunk_bounds, blobs, decode  # noqa: E402
+from sbus_decode import chunk_bounds, decode, part_name  # noqa: E402
 
 BONES = {"2682c5d5": 43, "482f1708": 109, "5995da06": 119, "5e493068": 119,
          "72b5ee25": 119, "a7b5710e": 119, "d1500c0c": 119, "f2d259a2": 119,
          "ff725ba4": 119}
 
 
-def gbk(b):
-    return b.split(b"\x00")[0].decode("gbk", "replace")
-
-
-def part_names(d, off, end, n):
-    """Recover the length-prefixed GBK part names stored before each sbus."""
-    names = []
-    i = off + 8
-    while i + 4 <= end and len(names) < n:
-        ln = int.from_bytes(d[i:i + 4], "little")
-        if 1 <= ln <= 64 and i + 4 + ln <= end:
-            raw = d[i + 4:i + 4 + ln]
-            if all(c == 0 or 32 <= c < 0x80 or c >= 0x81 for c in raw):
-                try:
-                    s = gbk(raw)
-                    # reject 1-char scans: real part names are multi-byte
-                    # GBK labels like 人类_男_战士7档_衣服_M or b_faxing00
-                    if len(s) >= 3:
-                        names.append(s)
-                        i += 4 + ln
-                        continue
-                except UnicodeDecodeError:
-                    pass
-        i += 1
-    return names + [f"part{k}" for k in range(len(names), n)]
+def sbus_offsets(d, start, end):
+    """File offsets of every `sbus` marker in [start, end)."""
+    out, i = [], start
+    while True:
+        j = d.find(b"sbus", i, end)
+        if j < 0:
+            return out
+        out.append(j)
+        i = j + 1
 
 
 def write_obj(parts, path, stem):
@@ -93,15 +77,17 @@ def main():
         if not mesh:
             continue
         off, _, end = mesh
-        raw = blobs(d, off + 8, end)
-        parts = [decode(b) for b in raw]
-        parts = [q for q in parts if q]
-        names = part_names(d, off, end, len(parts))
-        for q, nm in zip(parts, names):
-            q["name"] = nm
+        marks = sbus_offsets(d, off + 8, end)
+        parts = []
+        for k, m in enumerate(marks):
+            q = decode(d[m:marks[k + 1] if k + 1 < len(marks) else end])
+            if not q:
+                continue
+            q["name"] = part_name(d, m) or f"part{len(parts)}"
+            parts.append(q)
         nv = sum(q["n_verts"] for q in parts)
         nf = sum(len(q["faces"]) for q in parts)
-        print(f"{p.stem:10} {len(parts):5} {nv:7} {nf:7}  {names[0]}")
+        print(f"{p.stem:10} {len(parts):5} {nv:7} {nf:7}  {parts[0]['name']}")
         write_obj(parts, a.obj / (p.stem + ".obj"), p.stem)
         summary[p.stem] = dict(bones=BONES.get(p.stem), parts=[{
             "name": q["name"], "part_index": q["part_index"],

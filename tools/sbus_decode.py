@@ -7,20 +7,28 @@ Recovered by disassembling the record parser at VA 0x59A640 in
 between u32 fields, so every earlier 4-byte-aligned reading of the header was
 misaligned by design.
 
-Header (offsets are byte offsets from the `sbus` tag):
+Two header variants exist.  The loader reads a marker word at offset 8:
+
+  * marker == 0 (variant 2, used by every shipped file) - the marker is
+    followed by the u8 flag byte, then by n_vertices;
+  * marker != 0 (variant 1, not present in this build) - the marker word
+    *is* n_vertices and there is no flag byte and no `wide` byte.
+
+Variant 2 header (byte offsets from the `sbus` tag):
 
     0   u32  'sbus'
     4   u32  part_index
-    8   u32  0
-    12  u8   1                 <- breaks 4-byte alignment; everything after
-                                  is read unaligned
+    8   u32  0                 <- variant selector
+    12  u8   1                 <- flag; breaks 4-byte alignment, so every
+                                  field after this is read unaligned
     13  u32  n_vertices
-    17  u32  unknown
-    21  u32  unknown
-    25  u32  unknown           (count of an 8-byte-element side array)
+    17  u32  n_faces
+    21  u32  unknown  -> this+0x10     (0 in all 15 shipped parts)
+    25  u32  unknown  -> count of an 8-byte-element container at this+0x24
+                          (also 0 in all 15 shipped parts)
     29  u32  n_uv_sets
     33  u8   wide_flag         != 0 -> influence count is u16, else u8
-    34  f32  base_x .. step_x, base_y, step_y, base_z, step_z   (6 floats)
+    34  f32  base_x, step_x, base_y, step_y, base_z, step_z   (6 floats)
 
 Per vertex:
 
@@ -30,9 +38,34 @@ Per vertex:
     u8/u16 n              number of bone influences
     n x (u8 bone, u16 weight)          weight = u16 * 1e-4  (10000 = 1.0)
 
-Only the first 4 influences are kept by the engine (`cmp esi,4; jge`).
-Weights of 0 or 1 are skipped (`cmp ax,1; jbe`), so a lone weight of 1 means
-"no influence".
+Only the **first** UV set is retained (`test edi,edi; jne` at 0x59ABDC), but
+all n_uv_sets pairs are consumed.  In the two shipped parts that declare
+n_uv_sets == 2 the second pair is byte-identical to the first, so nothing is
+lost by keeping set 0.
+
+Influence handling has two code paths:
+
+  * n <= 4 (`0x59ADA4`): every pair is stored; a raw weight of 0 trips a
+    debug assert but the value is still written.
+  * n >  4 (`0x59AC4C`): every pair is still **consumed** from the stream,
+    but only the first four pairs whose raw weight is > 1 (i.e. > 1e-4) are
+    kept.  The rest are dropped on the floor.
+
+The n > 4 path also accumulates a running weight total that the parser never
+uses - dead bookkeeping left over from a normalisation step that was removed.
+
+Index buffer: `n_vertices < 1024` (`cmp eax, 0x400` at 0x59AFB8) stores one
+u32 per triangle holding three 10-bit indices, otherwise three plain u16.
+
+In-memory vertex record (60 bytes, allocated at 0x59A917 as n_verts * 0x3C):
+
+    0x00  f32 x, y, z
+    0x0C  f32 nx, ny, nz
+    0x18  u32 n_influences
+    0x1C  u32 bone[4], f32 weight[4]  interleaved, 8 bytes each
+
+The owning part object keeps an AABB at this+0x54 (min xyz) and this+0x60
+(max xyz), seeded to +-5e6 and grown as each vertex is decoded.
 
 Usage:
     python sbus_decode.py [--root DIR] [--out DIR]
@@ -73,6 +106,36 @@ def blobs(d, start, end):
     return out
 
 
+def part_name(d, off):
+    """Name of the part whose `sbus` blob starts at `off`, or None.
+
+    MESH stores each part as
+
+        u32 name_len | GBK name (NUL terminated) | u32 record_count | sbus blob
+
+    so the label sits immediately in front of the blob.  `record_count` is the
+    number of sbus records in the part and is 1 in every shipped file - it is
+    the sanity check that keeps the backward scan from wandering into the
+    previous part's vertex stream.
+    """
+    if off < 12 or struct.unpack_from("<I", d, off - 4)[0] != 1:
+        return None
+    for ln in range(1, 80):
+        p = off - 8 - ln
+        if p < 0:
+            return None
+        if struct.unpack_from("<I", d, p)[0] != ln:
+            continue
+        raw = d[p + 4:p + 4 + ln]
+        if not raw or raw[-1] != 0:
+            continue
+        try:
+            return raw[:-1].decode("gbk")
+        except UnicodeDecodeError:
+            continue
+    return None
+
+
 class Reader:
     def __init__(self, b):
         self.b = b
@@ -104,24 +167,26 @@ def decode(blob):
     if r.u32() != 0x73756273:
         return None
     out = {"part_index": r.u32()}
-    zero = r.u32()
-    flag1 = r.u8()
-    if zero != 0 or flag1 != 1:
-        return None
-    out["n_verts"] = r.u32()
-    out["unk17"] = r.u32()
+    marker = r.u32()
+    if marker == 0:                      # variant 2: flag byte present
+        if r.u8() != 1:
+            return None
+        out["variant"] = 2
+        out["n_verts"] = r.u32()
+    else:                                # variant 1: marker is n_verts
+        out["variant"] = 1
+        out["n_verts"] = marker
+    out["n_faces"] = r.u32()
     out["unk21"] = r.u32()
     out["unk25"] = r.u32()
     out["n_uv"] = r.u32()
-    wide = r.u8() != 0
+    wide = out["variant"] == 2 and r.u8() != 0
     bx, sx = r.f32() * SCALE, r.f32() * SCALE
     by, sy = r.f32() * SCALE, r.f32() * SCALE
     bz, sz = r.f32() * SCALE, r.f32() * SCALE
     out["base"] = [bx, by, bz]
     out["step"] = [sx, sy, sz]
     out["wide_influence"] = wide
-
-    out["n_faces"] = out["unk17"]
 
     verts = []
     for _ in range(out["n_verts"]):
@@ -138,14 +203,18 @@ def decode(blob):
             if k == 0:
                 uv = [a * NORMAL_K, b2 * NORMAL_K]
         n = r.u16() if wide else r.u8()
-        inf = []
+        pairs = []
         for _ in range(n):
             bone = r.u8()
             w = r.u16()
-            inf.append((bone, w * WEIGHT_K))
+            pairs.append((bone, w * WEIGHT_K))
+        # mirror the engine's storage rule exactly: n <= 4 keeps everything,
+        # n > 4 keeps only the first four pairs with a raw weight above 1
+        kept = pairs if n <= 4 else [q for q in pairs if q[1] > 1e-4][:4]
         verts.append(dict(pos=[px, py, pz], nrm=[nx, ny, nz], uv=uv,
-                          bones=[b for b, _ in inf],
-                          weights=[w for _, w in inf]))
+                          n_influences=n,
+                          bones=[b for b, _ in kept],
+                          weights=[w for _, w in kept]))
     out["verts"] = verts
 
     # ---- index buffer ----------------------------------------------------
