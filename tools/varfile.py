@@ -53,6 +53,14 @@ Seeded with the key at the string's first character, then folded per char
 -- the same fold as the archive page checksum (`sub_416D70`), but over
 16-bit units.  It is stored unencrypted, so it is an exact oracle for the
 string's true length even when the length field looks implausible.
+
+The varbin variant
+------------------
+The 48 `varbin` payloads inside `netpak.gpak` use the *same tag grammar*
+with the encryption removed: no seed, no key advance, no string checksum,
+no array trailer, and `0x32` blobs stored as `u32 len` + `len` raw bytes
+without dword padding.  `load_varbin()` reads that form.  All 48 payloads
+parse to their exact last byte.
 """
 import argparse
 import collections
@@ -83,14 +91,24 @@ class VarError(Exception):
 
 
 class Reader:
-    """Cursor over a `.var` payload with the rolling XOR key attached."""
+    """Cursor over a `.var` / `varbin` payload.
 
-    def __init__(self, buf, key=0):
+    Two modes share the tag grammar:
+
+      `plain=False`  the `.var` file — rolling XOR key, string checksums,
+                     array trailers
+      `plain=True`   a varbin payload — everything in the clear: no key,
+                     no checksums, no trailers
+    """
+
+    def __init__(self, buf, key=0, plain=False):
         self.b = buf
         self.p = 0
-        self.key = key
+        self.key = 0 if plain else key
+        self.plain = plain
         self.arrays = 0
         self.strings = 0
+        self.blobs = 0
         self.bad_checksums = 0
         self.first_bad = None
         self.tags = collections.Counter()
@@ -102,19 +120,23 @@ class Reader:
 
     def u8(self):
         self.need(1, "u8")
-        v = self.b[self.p] ^ (self.key & 0xFF)
+        v = self.b[self.p] ^ (0 if self.plain else self.key & 0xFF)
         self.p += 1
         return v
 
     def u16(self):
         self.need(2, "u16")
-        v = struct.unpack_from("<H", self.b, self.p)[0] ^ (self.key & 0xFFFF)
+        v = struct.unpack_from("<H", self.b, self.p)[0]
+        if not self.plain:
+            v ^= self.key & 0xFFFF
         self.p += 2
         return v
 
     def u32(self):
         self.need(4, "u32")
-        v = struct.unpack_from("<I", self.b, self.p)[0] ^ self.key
+        v = struct.unpack_from("<I", self.b, self.p)[0]
+        if not self.plain:
+            v ^= self.key
         self.p += 4
         return v
 
@@ -125,7 +147,14 @@ class Reader:
         # No fixed cap: some 组合 records carry one path per material slot
         # and a few models were exported with the texture list duplicated
         # hundreds of times (largest seen: 264,437 chars = 528 KB).
-        self.need(n * 2 + 4, f"string body (len {n}) at 0x{start:x}")
+        self.need(n * 2, f"string body (len {n}) at 0x{start:x}")
+        if self.plain:
+            raw = self.b[self.p:self.p + n * 2]
+            self.p += n * 2
+            self.strings += 1
+            return raw.decode("utf-16-le", "replace")
+
+        self.need(4, "string checksum")
         acc = self.key
         out = bytearray()
         for _ in range(n):
@@ -147,9 +176,35 @@ class Reader:
         """0x50 / 0x51: UTF-8 string with a u32 or u16 byte count."""
         n = self.u32() if wide_len else self.u16()
         self.need(n, f"narrow string (len {n}) at 0x{self.p:x}")
-        raw = bytes(c ^ (self.key & 0xFF) for c in self.b[self.p:self.p + n])
+        if self.plain:
+            raw = self.b[self.p:self.p + n]
+        else:
+            raw = bytes(c ^ (self.key & 0xFF)
+                        for c in self.b[self.p:self.p + n])
         self.p += n
         return raw.decode("utf-8", "replace")
+
+    def blob(self):
+        """0x32: raw byte blob, `u32 len` then `len` bytes.
+
+        In a varbin the payload is copied verbatim.  The `.var` writer
+        encrypts dword-at-a-time (VA 0x42C430), so it pads up to a multiple
+        of 4 and appends the final key; no `.var` in the install actually
+        uses the tag, so that branch is read from the writer but unproven.
+        """
+        n = self.u32()
+        if self.plain:
+            self.need(n, f"blob ({n} bytes) at 0x{self.p:x}")
+            raw = self.b[self.p:self.p + n]
+            self.p += n
+        else:
+            padded = (n + 3) & ~3
+            self.need(padded + 4, f"blob ({n} bytes) at 0x{self.p:x}")
+            raw = bytes(c ^ (self.key & 0xFF)
+                        for c in self.b[self.p:self.p + n])
+            self.p += padded + 4
+        self.blobs += 1
+        return raw
 
     # -- values --------------------------------------------------------
     def value(self, depth=0):
@@ -183,6 +238,8 @@ class Reader:
             return ""
         if t == 0x31:
             return self.string()
+        if t == 0x32:
+            return self.blob()
         if t == 0x51:
             return self.narrow(False)
         if t == 0x50:
@@ -199,8 +256,11 @@ class Reader:
             raise VarError(f"array count {n} at 0x{self.p:x}")
         out = []
         for _ in range(n):
-            self.key = advance(self.key)      # writer VA 0x42C991
+            if not self.plain:
+                self.key = advance(self.key)  # writer VA 0x42C991
             out.append(self.value(depth + 1))
+        if self.plain:
+            return out
         self.need(4, "array trailer")
         stored = struct.unpack_from("<I", self.b, self.p)[0]
         if stored != self.key:
@@ -224,6 +284,24 @@ def load(path):
                 consumed=rd.p, total=len(rd.b), arrays=rd.arrays,
                 strings=rd.strings, bad_checksums=rd.bad_checksums,
                 first_bad=rd.first_bad, tags=rd.tags)
+
+
+def load_varbin(data):
+    """Decode a varbin payload: the same tag grammar, entirely in the clear.
+
+    `data` is the *unwrapped* payload — run it through `gpak.unwrap` first,
+    because the archive entry is a `0x602376D7` minizip wrapper around it.
+    Unlike a `.var` there is no seed, no rolling key, no string checksum and
+    no array trailer; strings are bare UTF-16 and `0x32` blobs are
+    `u32 len` + `len` raw bytes with no padding.
+    """
+    if isinstance(data, (str, pathlib.Path)):
+        data = pathlib.Path(data).read_bytes()
+    rd = Reader(data, plain=True)
+    value = rd.value()
+    return dict(value=value, consumed=rd.p, total=len(data),
+                arrays=rd.arrays, strings=rd.strings, blobs=rd.blobs,
+                tags=rd.tags)
 
 
 # --- SysFileVer.var record schema -------------------------------------

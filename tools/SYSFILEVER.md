@@ -121,6 +121,20 @@ enforces it as an invariant rather than merely measuring it.
 
 All **29,860** arrays in `SysFileVer.var` pass.
 
+### 1.4 The same grammar, unencrypted, in `varbin`
+
+The 48 `varbin` payloads in `netpak.gpak` are the *same tagged tree* with the
+encryption stripped: no seed, no key advance, no string checksum, no array
+trailer, and `0x32` blobs stored as `u32 len` + `len` raw bytes with no dword
+padding. `varfile.Reader(plain=True)` / `varfile.load_varbin()` read that form,
+and `tools/varbin_tree.py` drives it.
+
+This matters because `varbin` had been attacked as a positional numeric grammar
+and stalled at 48% field coverage — the tag was taken for a schema field id, so
+record boundaries were never fixed. Recognising the shared grammar closed it:
+all 48 payloads now decode byte-exactly, 19,640 records in total. See
+[`GPAK_FORMAT.md`](GPAK_FORMAT.md) §4.2.
+
 ---
 
 ## 2. Record schema

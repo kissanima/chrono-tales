@@ -310,35 +310,56 @@ The 49 `.bin` entries in `netpak` are ZIPs (one member, literally named `varbin`
 behind a 4-byte `D7 76 23 60` prefix). Uncompressed they total **10,104,187 bytes** —
 the single largest payload in either archive, and it is *content*, not code.
 
-`varbin` is a flat **tagged value stream**, not a table of fixed records:
+`varbin` is **the same tagged serialisation as `SysFileVer.var`, with the
+encryption removed** (see [`SYSFILEVER.md`](SYSFILEVER.md)). The tag really is a
+*type* tag, and each payload is a single fixed-schema table:
 
-| byte | payload | meaning |
-|---|---|---|
-| `0x31` | `u32 charCount` + `charCount*2` bytes UTF-16LE | string (self-describing) |
-| `0x10` | 1 | u8 |
-| `0x11` | 1 | u8 |
-| `0x12` | 4 | int32 (saw `0xFFFFFFFF` = −1) |
-| `0x13` | 4 | float32 (saw `0x3F800000` = 1.0, `0x3F4CCCCD` = 0.8) |
-| `0x40` | 1 | u8 (often a small count) |
-| `0x41` | 4 | u32 (header count / version) |
+| tag | payload |
+|---|---|
+| `0x00`–`0x0F` | small int; the value *is* the tag |
+| `0x10` | `u8` |
+| `0x11` | `u16` |
+| `0x12` | `i32` |
+| `0x13` | `f32` |
+| `0x14` / `0x15` / `0x21` | `i64` |
+| `0x16` | vec3, three `u32` |
+| `0x20` | `u32` |
+| `0x30` | empty string, no payload at all |
+| `0x31` | `u32 charCount` + `charCount*2` bytes UTF-16LE, **no checksum** |
+| `0x32` | `u32 len` + `len` raw bytes |
+| `0x40` | array, count as `u8` |
+| `0x41` | array, count as `u32` |
+| `0xFF` | null |
 
-The tag is a **schema field id**, not a type: the payload width is implied by the id,
-so a reader only needs the width table above — the meaning of each id lives in the
-game binary and in the `tabedit/*.gbc` editors (see below). No compression, no
-encryption; only the strings are self-describing, which is what makes the file
-readable at all.
+Compared with the `.var` form there is no seed, no rolling XOR key, no string
+checksum, no array trailer, and `0x32` blobs are not dword-padded. `tools/varfile.py`
+reads both shapes; `tools/varbin_tree.py` drives the varbin side.
 
-Deriving the width table was a constraint problem, not guesswork. Every "gap" between
-two strings is an independent, complete sequence of non-string fields, so it is a hard
-constraint on the widths. Solving by intersection across all 25,492 distinct gaps
-pinned the seven ids above; `tools/varbin_solve.py` reproduces it. The remaining ids
-are unresolved (strict gap coverage 48%), so `varbin_extract.py` **resynchronises** on
-the next valid string instead of aborting — every blob yields all of its text even
-where the numeric grammar is still open.
+**All 48 payloads parse to their exact last byte** — 10,104,187 bytes holding
+**19,640 records**. Each payload is one table: every record in it has the identical
+field count, from 4 up to 88.
 
-**Records are property bags.** Strings appear as adjacent label/value pairs. Labels
-recur thousands of times across the corpus, so adjacency alone recovers a categorical
-cross-tab without needing the numeric schema:
+> An earlier pass read this as a property bag and tried to solve a positional width
+> table from the "gaps" between strings. That stalled at 48% because the tag was
+> taken to be a *schema field id* rather than a type — record boundaries were never
+> fixed, so the widths could not converge. The 48% figure is superseded; the
+> structure is fully known.
+
+**Records are fixed-schema rows.** Taking `0580853e` (1,833 records × 66 fields) as
+the example:
+
+| field | content |
+|---|---|
+| 0 | entity id (`u32`) |
+| 1 | Chinese name, e.g. `希望草原_采集_幽泉水井` |
+| 3 | English name, e.g. `Deepspring Well Breath` |
+| 25 | **property sub-array**, alternating label/value: `['分类','希望草原NPC','添加人','sxn']` |
+| 28 | description text |
+| 32 | spawn transform `[kind, x, z, (quat...)]` |
+| 42 | interaction tag, e.g. `采集效果` |
+
+Field 25 is where the old property-bag statistics actually came from — it is a
+*field*, not the record layout. The label census it produced is still valid:
 
 | label | occurrences | top values |
 |---|---|---|
@@ -354,26 +375,31 @@ The six playable classes are `学士` Scholar, `刺客` Assassin, `牧师` Pries
 `战士` Warrior, `法师` Mage, plus `通用` universal. Tiers run `新手` → `一档`…`七档`
 plus `时装` cosmetic.
 
-Blob roles split cleanly by string density: **39 of 49** are property bags
-(strings > 50% of tokens), 6 are mixed, and 4 (`cc5de97f`, `da80ff38`, `4514d98f`,
-`c41c9276`) are pure binary — the last has zero strings in 12,744 bytes.
+Blob roles split cleanly by string density: **39 of 48** are string-heavy
+(strings > 50% of tokens), 6 are mixed, and 3 (`cc5de97f`, `da80ff38`, `4514d98f`)
+are dominated by `0x32` raw blobs — they are map/tile payloads, not tables.
+`c41c9276` is not a varbin at all: it is `jumpdown.caf`, an audio asset filed
+under the wrong extension.
 
-#### File header — three integers
+#### File header — two integers, then the first field
 
-Every blob opens with the same triple:
+Every payload opens with the outer array header, then the first record's own header:
 
 ```
-[record count]  [column count]  [flag word]
+0x41 <u32 recordCount>      outer array
+0x40 <u8  columnCount>      first record, i.e. its field count
 ```
 
-`record count` is `0x40 <u8>` for small tables and `0x41 <u32>` above 255; the flag
-word's high bit is **always set** across all 26 occurrences, so it is a flag/version
-word rather than a name hash (hashing every table name, filename and editor title at
-three hash types produced no match). It repeats between unrelated tables, confirming
-it is not an identifier.
+`record count` uses `0x40 <u8>` below 256 and `0x41 <u32>` above; `column count` is
+the record length and is identical for every record in the payload.
 
-`column count` is the identification key: it must equal the editor's `m_szItemName`
-length. Matching all 49 blobs against the 43 schemas:
+What an earlier pass read as a third "flag word" is the **first field's tag plus
+payload** — `12 32 ad 35 80` is `i32` with a 4-byte body. Its high bit looked
+"always set" because the leading byte is the `0x12` type tag rather than a bitfield,
+and it "repeated between unrelated tables" because the tag is doing its job.
+
+`column count` is still the identification key: it must equal the editor's
+`m_szItemName` length. Matching all 48 blobs against the 43 schemas:
 
 | blob | records | cols | table |
 |---|---|---|---|
@@ -420,8 +446,10 @@ length. Matching all 49 blobs against the 43 schemas:
 | `4ea8321c` | 309 | 11 | **gifttabedit** 礼包表 |
 | `fcef78c4` … | | | |
 
-**46 / 49 identified**, 21 unambiguously by column count alone; **19,640 records** in
-total. The tie-breaks (five blobs share 12 columns, four share 6, three share 15) are
+**46 / 48 identified**, 21 unambiguously by column count alone; **19,640 records** in
+total — the same figure the tagged-tree decode produces, which cross-checks both
+approaches. (`c41c9276` is excluded: it is `jumpdown.caf` audio, not a table.) The
+tie-breaks (five blobs share 12 columns, four share 6, three share 15) are
 resolved by scoring the blob's string vocabulary against each candidate's column names.
 `tabeditcom.gbc` and `tabeditlist.gbc` are the editor *framework*, not tables, so 43 is
 the true table count — which is why the 88-column and 2-column blobs have no schema.
@@ -855,10 +883,12 @@ tools/gpak_write.py        writer: page/dir/free-list emitter, byte-exact rebuil
 tools/gpak_repack.py       CLI: roundtrip | fresh  (verifies the writer)
 tools/names.json           recovered filename table (hash -> path)
 tools/propagate_names.py   #include-graph filename propagation
+tools/varfile.py           `.var` + `varbin` tagged-tree decoder (both modes)
+tools/varbin_tree.py       CLI: check | show | schema | csv  (tagged-tree view)
 tools/varbin_extract.py    entity DB: tokens | text | keys (label->value cross-tab)
 tools/varbin_identify.py   maps each blob to its game table via header column count
 tools/varbin_tables.py     exports identified blobs to extracted/tables/*.csv
-tools/varbin_solve.py      solves the varbin field-width table by constraint
+tools/varbin_solve.py      superseded: the old positional width-table solver
 tools/tabedit_schema.py    extracts all 43 table schemas from tabedit/*.gbc
 tools/table_schemas.json   43 tables: columns, type codes, help text
 tools/mesh_decode.py       .53wf / .cmz structural decode -> extracted/models/*.json
@@ -927,7 +957,8 @@ python propagate_names.py
 
 ```bash
 python varbin_dump.py        # unpack the 49 bundles to work/varbin/*.bin + hex view
-python varbin_solve.py       # solve the field-width table -> varbin_fields.json
+python varbin_tree.py check  # decode all 48 payloads, assert byte-exact
+python varbin_tree.py show 0580853e   # pretty-print one payload as JSON
 python varbin_identify.py    # blob -> game table map -> varbin_identity.json
 python varbin_extract.py keys     # label -> value cross-tab -> varbin_keytab.json
 python varbin_extract.py text     # flat searchable strings per blob
@@ -968,15 +999,13 @@ strings (8,720 of them `@"…"`), 282 `csvr::call` server-RPC sites, 158 enums.
   It is the client's own compression tag `0x602376D7`, written at `0x53972F` and
   dispatched at `0x539979` alongside two siblings — see §2.7. It is also not on
   every ZIP: `c41c9276` has none because it holds `jumpdown.caf`, not a varbin.
-- `varbin` field ids beyond the seven in the table above are still open. Strict gap
-  coverage is 48%; the blockers are ids whose gaps are ambiguous under intersection
-  (two unknown ids in one gap). Table identification itself succeeded by a different
-  route — matching the record's declared column count against `len(m_szItemName)` in
-  `tabedit/*.gbc`, tie-broken by string-vocabulary overlap — giving **46 / 49** blobs
-  and 19,640 records. Six blobs (`0580853e`, `66d2c4f3`, `d07f4acc`, `433267c3`,
-  `e15a7343`, `c41c9276`) still desync mid-stream; forcing them invents tags, so they
-  are left unexported rather than exported wrong. One of the six is now explained
-  away rather than open: `c41c9276` is not a varbin at all — see §2.7.
+- ~~`varbin` field ids beyond the seven in the table above are still open; strict gap
+  coverage is 48%.~~ **Resolved.** The tag is a *type* tag, not a schema field id, so
+  there was never a width table to solve — see §4.2. All 48 payloads now decode to
+  their exact last byte via `tools/varfile.py`, yielding **19,640 records**. The six
+  blobs that used to desync (`0580853e`, `66d2c4f3`, `d07f4acc`, `433267c3`,
+  `e15a7343`, plus `c41c9276`) were never malformed: five simply use the `0x32` raw
+  blob tag, and `c41c9276` is not a varbin at all — see §2.7.
 - `.cmz` `sbus` skin records are **solved** — see §4.6. The earlier note claiming a
   32-byte / 7×u32 header was **wrong**: a `u8` flag sits between two `u32` fields, so
   every aligned read of that header is off by one. Once unpacked, the blob is the

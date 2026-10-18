@@ -19,8 +19,7 @@ specification and findings log. This README is only an index.
 | `.gpak` container (pages, cipher, CRC, MPQ name hash, wrappers) | solved |
 | Filename recovery (hash → path) | 327 / 483 (68%) |
 | `.gbc` script source (uncompiled GBK DSL, 235 files) | solved |
-| `varbin` entity database (48 blobs, 19,640 records) | 46 / 48 identified |
-| `varbin` numeric field grammar | partial (48% gap coverage) |
+| `varbin` entity database (48 blobs, 19,640 records) | solved (byte-exact) |
 | `.53wf` mesh geometry | solved |
 | `.cmz` skeleton + bind pose | solved |
 | `.cmz` `sbus` skinned geometry + index buffer | solved |
@@ -67,6 +66,8 @@ python tools/gpak_extract.py wrap    gbox/lm_en/netpak.gpak   # compression tags
 python tools/gpak_extract.py extract gbox/lm_en/netpak.gpak extracted
 
 # entity database
+python tools/varbin_tree.py check        # decode all 48 payloads, assert byte-exact
+python tools/varbin_tree.py show 0580853e
 python tools/varbin_identify.py          # blob -> game table
 python tools/varbin_tables.py            # -> extracted/tables/*.csv
 
