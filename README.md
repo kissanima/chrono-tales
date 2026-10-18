@@ -20,6 +20,7 @@ specification and findings log. This README is only an index.
 | Filename recovery (hash → path) | 327 / 483 (68%) |
 | `.gbc` script source (uncompiled GBK DSL, 235 files) | solved |
 | `varbin` entity database (48 blobs, 19,640 records) | solved (byte-exact) |
+| `varbin` blob → game table (42 tables, 19,634 rows exported) | 42 / 48 (37 editors + 5 editor-less) |
 | `.53wf` mesh geometry | solved |
 | `.cmz` skeleton + bind pose | solved |
 | `.cmz` `sbus` skinned geometry + index buffer | solved |

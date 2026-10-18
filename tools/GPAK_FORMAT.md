@@ -398,61 +398,106 @@ payload** — `12 32 ad 35 80` is `i32` with a 4-byte body. Its high bit looked
 "always set" because the leading byte is the `0x12` type tag rather than a bitfield,
 and it "repeated between unrelated tables" because the tag is doing its job.
 
-`column count` is still the identification key: it must equal the editor's
-`m_szItemName` length. Matching all 48 blobs against the 43 schemas:
+**Identification is two signals plus one hard rule.** Column count is the first
+signal: it must equal the editor's `m_szItemName` length. The second is the
+**field-type signature** — each schema declares a widget code per column, and
+those codes map onto the serialised kind (`1`/`2` → int, `256`/`257`/`258` → str,
+`1024`/`2048+`/`>=3840` → list). A payload's decoded records must agree
+column-by-column, and that agreement is *scored*, not assumed.
 
-| blob | records | cols | table |
-|---|---|---|---|
-| `87d142c2` | 4,122 | 52 | **itemtabedit** 物品表编辑 |
-| `0580853e` | 1,833 | 66 | **npctabedit** NPC table |
-| `433267c3` | 1,399 | 88 | *(no matching editor)* |
-| `47bf0e8a` | 1,298 | 7 | **droptabedit** 掉落表编辑 |
-| `fcf45131` | 1,193 | 57 | **skilltabedit** 技能表 |
-| `fcef78c4` | 1,157 | 22 | **npcmaketabedit** NPC 合成表 |
-| `6b1f6475` | 1,020 | 37 | **bufftabedit** buff 表 |
-| `8664461b` | 924 | 24 | **effectabedit** 效果表 |
-| `66d2c4f3` | 735 | 3 | **paramtabedit** 参数表 |
-| `15fe62ab` | 560 | 32 | **maketabedit** 合成表 |
-| `33e159c6` | 329 | 6 | **forcetabedit** 势力表 |
-| `60792c4a` | 331 | 8 | **unionbuffedit** 公会 BUFF 表 |
-| `09f8db1d` | 262 | 20 | **daytaskedit** 每日成就表 |
-| `6a64e3da` | 255 | 18 | **MapAreaDlg** 地图区域 |
-| `57defdf0` | 244 | 4 | **exptabedit** 经验表 |
-| `cbc16f9c` | 213 | 12 | **EquipTableEdit** 装备表 |
-| `d483aad3` | 177 | 12 | **EquipTableEdit** |
-| `8d861de9` | 159 | 15 | **gameshopedit** 商城表 |
-| `55b90d45` | 154 | 8 | **unionbuffedit** |
-| `0e747450` | 136 | 12 | **EquipTableEdit** |
-| `486bf1bd` | 128 | 5 | **pathedit** 路径表 |
-| `5218cf47` | 80 | 5 | **pathedit** |
-| `37a1742e` | 65 | 15 | **gameshopedit** |
-| `93c34746` | 49 | 25 | **shoptabedit** 商店表 |
-| `9f9048cf` | 46 | 29 | **worldtabedit** 场景表 |
-| `204d427b` | 41 | 12 | **EquipTableEdit** |
-| `d07f4acc` | 27 | 27 | **peteditlist** 宠物表 |
-| `dd447626` | 26 | 12 | **EquipTableEdit** |
-| `615fbfd5` | 20 | 23 | **daliytabedit** 日常活动表 |
-| `455cc3b0` | 18 | 17 | **daliyactivitytabedit** 每日活动表 |
-| `fe4857b1` | 18 | 9 | **runetabedit** VIP 表 |
-| `96c9244b` | 12 | 15 | **gameshopedit** |
-| `4a5475b2` | 12 | 7 | **droptabedit** |
-| `af3407ec` | 12 | 6 | **forcetabedit** |
-| `8898f905` | 10 | 16 | **actiontabedit** 动作表 |
-| `1e806186` | 8 | 6 | **forcetabedit** |
-| `fcd47eb6` | 7 | 9 | **runetabedit** |
-| `c3eba311` | 6 | 39 | **passtabedit** |
-| `6fb967a3` | 5 | 14 | **tasktabedit** 任务表 |
-| `e15a7343` | 1,982 | 2 | *(no matching editor)* |
-| `4ea8321c` | 309 | 11 | **gifttabedit** 礼包表 |
-| `fcef78c4` … | | | |
+The hard rule sits between them: **no `tabedit` schema declares a blob column**,
+so any payload whose records contain a `bytes` field is not a table at all. That
+is what the six map payloads are — they had been filed under `forcetabedit`
+purely because they happened to have six columns.
 
-**46 / 48 identified**, 21 unambiguously by column count alone; **19,640 records** in
-total — the same figure the tagged-tree decode produces, which cross-checks both
-approaches. (`c41c9276` is excluded: it is `jumpdown.caf` audio, not a table.) The
-tie-breaks (five blobs share 12 columns, four share 6, three share 15) are
-resolved by scoring the blob's string vocabulary against each candidate's column names.
-`tabeditcom.gbc` and `tabeditlist.gbc` are the editor *framework*, not tables, so 43 is
-the true table count — which is why the 88-column and 2-column blobs have no schema.
+Assignment is also **one-to-one**: an editor owns at most one payload. Without
+that rule the top-scoring candidate wins for *every* blob that ties on column
+count, which silently files unrelated tables under one editor — `pathedit` was
+claiming three 5-column payloads, `unionbuffedit` two 8-column ones. Scoring
+every (blob, table) pair globally and handing each table to its best claimant
+resolves both. A payload that loses every table it wanted is reported as
+`unshipped` (if it is a known editor-less table) or `ambiguous` — never guessed.
+
+| blob | records | cols | table | conf |
+|---|---|---|---|---|
+| `87d142c2` | 4,122 | 52 | **itemtabedit** 物品表编辑 | exact |
+| `e15a7343` | 1,982 | 2 | *sceneobjtab* — 场景物件表: scene name -> 64 object ids, no shipped editor | unshipped |
+| `0580853e` | 1,833 | 66 | **npctabedit** | exact |
+| `433267c3` | 1,399 | 88 | *questtab* — 任务表 (天梯/主线/支线/日常), 88 columns, no shipped editor | unshipped |
+| `47bf0e8a` | 1,298 | 7 | **droptabedit** 掉落表编辑 | signature |
+| `fcf45131` | 1,193 | 57 | **skilltabedit** | exact |
+| `fcef78c4` | 1,157 | 22 | **npcmaketabedit** | exact |
+| `6b1f6475` | 1,020 | 37 | **bufftabedit** | exact |
+| `8664461b` | 924 | 24 | **effectabedit** | exact |
+| `66d2c4f3` | 735 | 3 | **paramtabedit** 参数表编辑 | exact |
+| `15fe62ab` | 560 | 32 | **maketabedit** 合成表编辑 | exact |
+| `60792c4a` | 331 | 8 | *starbufftab* — 星运表: buff effect definitions referenced by startabedit's per-sign lists, 8 columns, no shipped editor | unshipped |
+| `33e159c6` | 329 | 6 | **triggertabedit** 触发器表编辑 | signature |
+| `4ea8321c` | 309 | 11 | **gifttabedit** 礼包表编辑 | exact |
+| `09f8db1d` | 262 | 20 | **daytaskedit** 每日成就表编辑 | exact |
+| `6a64e3da` | 255 | 18 | **MapAreaDlg** | exact |
+| `b0a40a84` | 252 | 5 | *nodegraphtab* — 寻路节点图: node id, name, x, z, neighbour ids, 5 columns, no shipped editor | unshipped |
+| `57defdf0` | 244 | 4 | **exptabedit** 经验表编辑 | exact |
+| `cbc16f9c` | 213 | 12 | **synmaterialtabedit** 物品合成表编辑 | signature |
+| `d483aad3` | 177 | 12 | **EquipTableEdit** 装备表编辑 | signature |
+| `8d861de9` | 159 | 15 | **gameshopedit** 游戏商城表编辑 | signature |
+| `55b90d45` | 154 | 8 | **unionbuffedit** 公会BUFF表编辑 | signature |
+| `0e747450` | 136 | 12 | **worldmapdatatabedit** 大地图信息显示表编辑 | signature |
+| `486bf1bd` | 128 | 5 | **transtabedit** 传送表编辑 | signature |
+| `5218cf47` | 80 | 5 | **pathedit** | signature |
+| `37a1742e` | 65 | 15 | **titletabedit** 称号表编辑 | signature |
+| `93c34746` | 49 | 25 | **shoptabedit** 掉落表编辑 | exact |
+| `9f9048cf` | 46 | 29 | **worldtabedit** 场景表编辑 | exact |
+| `204d427b` | 41 | 12 | **lifeskilltabedit** 生活技能表编辑 | signature |
+| `d07f4acc` | 27 | 27 | **peteditlist** 宠物表编辑 | exact |
+| `dd447626` | 26 | 12 | *starsoultab* — 星魂表 (star soul definitions), 12 columns, no shipped editor | unshipped |
+| `615fbfd5` | 20 | 23 | **daliytabedit** 日常活动表编辑 | exact |
+| `455cc3b0` | 18 | 17 | **daliyactivitytabedit** 每日活动表编辑 | exact |
+| `fe4857b1` | 18 | 9 | **runetabedit** VIP表编辑 | signature |
+| `4a5475b2` | 12 | 7 | **startabedit** 星座表编辑 | signature |
+| `96c9244b` | 12 | 15 | **viptabedit** VIP表编辑 | signature |
+| `af3407ec` | 12 | 6 | **ziptabedit** 动作包定义表编辑 | signature |
+| `8898f905` | 10 | 16 | **diamondedit** 水晶割据表编辑 | signature |
+| `1e806186` | 8 | 6 | **forcetabedit** 势力表编辑 | signature |
+| `fcd47eb6` | 7 | 9 | **specialtabedit** 特殊活动表编辑 | signature |
+| `c3eba311` | 6 | 39 | **passtabedit** | exact |
+| `6fb967a3` | 5 | 14 | **tasktabedit** 任务表编辑 | exact |
+
+**42 / 48 payloads are tables**, carrying **19,634 of the 19,640 records**; the
+remaining 6 are the map payloads, one record each. Confidence splits
+**19 `exact`** (unique column count *and* uncontested), **18 `signature`** (won
+on field-type agreement over a rival), **5 `unshipped`**, **6 `map`**.
+
+The five editor-less tables are kept with positional `c0..cN` headers rather than
+discarded:
+
+| blob | rows × cols | what it is |
+|---|---|---|
+| `433267c3` | 1,399 × 88 | 任务表 — 789 天梯 / 324 主线 / 190 支线 / 91 日常 quests |
+| `e15a7343` | 1,982 × 2 | 场景物件表 — scene name → up to 64 object ids |
+| `dd447626` | 26 × 12 | 星魂 definitions (icon, id list, value band) |
+| `60792c4a` | 331 × 8 | 星运 buff effects — the leaves `startabedit` points at |
+| `b0a40a84` | 252 × 5 | 寻路节点图 — node id, name, x, z, neighbour ids |
+
+The last two are the reason one-to-one matters. `60792c4a` and `55b90d45` both
+have 8 columns, and `unionbuffedit` is the only 8-column editor; but `55b90d45`'s
+rows are `["A级1", …, 是否公会满员, 公会在线人数, 公会平均等级, …]` — literally the
+guild-buff columns — while `60792c4a`'s are `[id, 星运_击中_中毒_蓝, "Forcible
+Poison", …, description]`, i.e. named entity records with no guild field at all.
+Same story for 5 columns: `5218cf47` holds real `路径_*` waypoint lists
+(`pathedit`), `486bf1bd` holds `[地点名, 世界, 坐标, …]` teleports
+(`transtabedit`), and `b0a40a84` holds neither.
+
+Two shipped editors carry a **stale title string** — `shoptabedit.gbc` says
+`掉落表编辑` (copied from `droptabedit.gbc`) and `runetabedit.gbc` says `VIP表编辑`
+(copied from `viptabedit.gbc`). The *filename* is the reliable identity, not the
+title; two more (`pathedit.gbc`, `npctabedit.gbc`) have no title at all.
+
+There are **43 table editors** (`tabeditcom.gbc` and `tabeditlist.gbc` are the
+editor *framework* and are excluded from that count). 37 of them are matched by a
+payload; the other six have no netpak table, so they are either server-only or
+were never populated. The 88- and 2-column payloads have no schema to match at
+all, which is why they land in `unshipped`.
 
 The framework also explains what `netpak` is. `tabeditcom.gbc::GetAllData` fetches rows
 over the network:
@@ -886,8 +931,9 @@ tools/propagate_names.py   #include-graph filename propagation
 tools/varfile.py           `.var` + `varbin` tagged-tree decoder (both modes)
 tools/varbin_tree.py       CLI: check | show | schema | csv  (tagged-tree view)
 tools/varbin_extract.py    entity DB: tokens | text | keys (label->value cross-tab)
-tools/varbin_identify.py   maps each blob to its game table via header column count
-tools/varbin_tables.py     exports identified blobs to extracted/tables/*.csv
+tools/varbin_identify.py   blob -> game table: column count + field-type signature,
+                           one-to-one assignment (exact/signature/unshipped/map)
+tools/varbin_tables.py     exports the 42 identified tables to extracted/tables/*.csv
 tools/varbin_solve.py      superseded: the old positional width-table solver
 tools/tabedit_schema.py    extracts all 43 table schemas from tabedit/*.gbc
 tools/table_schemas.json   43 tables: columns, type codes, help text
@@ -960,6 +1006,7 @@ python varbin_dump.py        # unpack the 49 bundles to work/varbin/*.bin + hex 
 python varbin_tree.py check  # decode all 48 payloads, assert byte-exact
 python varbin_tree.py show 0580853e   # pretty-print one payload as JSON
 python varbin_identify.py    # blob -> game table map -> varbin_identity.json
+python varbin_tables.py      # 42 identified tables -> extracted/tables/*.csv
 python varbin_extract.py keys     # label -> value cross-tab -> varbin_keytab.json
 python varbin_extract.py text     # flat searchable strings per blob
 python varbin_extract.py tokens   # ordered token dump (JSONL) per blob
@@ -1002,10 +1049,13 @@ strings (8,720 of them `@"…"`), 282 `csvr::call` server-RPC sites, 158 enums.
 - ~~`varbin` field ids beyond the seven in the table above are still open; strict gap
   coverage is 48%.~~ **Resolved.** The tag is a *type* tag, not a schema field id, so
   there was never a width table to solve — see §4.2. All 48 payloads now decode to
-  their exact last byte via `tools/varfile.py`, yielding **19,640 records**. The six
-  blobs that used to desync (`0580853e`, `66d2c4f3`, `d07f4acc`, `433267c3`,
-  `e15a7343`, plus `c41c9276`) were never malformed: five simply use the `0x32` raw
-  blob tag, and `c41c9276` is not a varbin at all — see §2.7.
+  their exact last byte via `tools/varfile.py`, yielding **19,640 records**. The
+  earlier desyncs were an artifact of the misreading, not of the data: `433267c3`,
+  `e15a7343`, `0580853e`, `66d2c4f3` and `d07f4acc` are ordinary tables (they are
+  `unshipped`, `unshipped`, npctabedit, paramtabedit and peteditlist respectively),
+  the six map payloads `4514d98f` / `6010fb33` / `6b45f638` / `9feba4ac` / `cc5de97f`
+  / `da80ff38` carry `0x32` raw tiles by design, and `c41c9276` is not a varbin at
+  all — see §2.7.
 - `.cmz` `sbus` skin records are **solved** — see §4.6. The earlier note claiming a
   32-byte / 7×u32 header was **wrong**: a `u8` flag sits between two `u32` fields, so
   every aligned read of that header is off by one. Once unpacked, the blob is the

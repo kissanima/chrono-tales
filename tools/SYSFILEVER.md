@@ -223,9 +223,15 @@ The probability of that happening by chance is `(15/16)^23212 ≈ e^-1497`.
 all** — particle systems reference hand-named textures, so anything matching
 `effect/` must not be zero-padded blindly.
 
-The `8`/`9` spike (13,289 of 23,212, 57%) is unexplained. It is consistent
-with a 32-bit hash whose top bit is usually set, but nothing in the writer
-confirms that.
+The `8`/`9` spike is a **counting artifact**, not a property of the GUID space.
+Counting *references* (23,212) makes nibble `8` look 12× more common than `A`,
+but counting **distinct GUIDs** (5,658) the distribution is flat — all 256 top
+bytes fall between 14 and 37 occurrences, and the split about `0x80000000` is
+2,694 / 2,964. The skew is entirely reference frequency: `tex/89bbed47.png` is
+referenced **7,777** times and `tex/9890e993` **3,155** times, because a few
+models were exported with their texture lists duplicated hundreds of times
+(see §4). Those two alone are 10,932 of the 13,311 references to `8`/`9`-leading
+GUIDs. The GUID space itself is uniform.
 
 ---
 
@@ -318,13 +324,18 @@ that recovers the 96 names.
 
 ## 6. Loose ends
 
-- The `0x32` / `0x33` blob tags never occur in this file, so their exact
-  layout (length-prefix width, the `dl == 0xFF` extra-dword quirk at
-  `0x42C461`) is read from the writer but **not** exercised by real data.
-- The `8`/`9` first-nibble skew in asset GUIDs is unexplained (see 2.2).
-- Field 14 (`id`) is an integer with no confirmed external referent. A byte
-  size is the natural guess — related records do carry near-identical values
-  (`65086`, `65087`, `65088` for three sibling textures) — but it cannot be
-  tested yet, because the assets it describes live inside the varbin bundles
-  rather than in the archive directory. The 834 records holding the sentinel
-  `1` are presumably generated or empty slots.
+- Field 14 is **not** an asset size. Of the 96 records whose path resolves to a
+  real archive entry, **none** matches that entry's stored size; and for
+  compressed entries the var value is *smaller* than the stored size, which
+  rules out "uncompressed size" as well. It behaves like a per-asset
+  **identifier**: 9,128 of the 9,141 non-sentinel values are distinct, it is
+  not monotonic with record order (5,184 of 9,974 steps increase, i.e. chance),
+  and 834 records carry the sentinel `1`. What allocates those ids is not
+  visible from the file.
+- The `0x32` / `0x33` blob tags never occur in this file, so their encrypted
+  framing is read from the writer at `0x42C430` / `0x42C4CB` rather than
+  exercised by data. `0x33` is `u32 len ^ key` + verbatim bytes + key trailer
+  (`9 + len`); `0x32` is a chained-xor over the plaintext dwords plus a
+  redundant dword every 256. `varfile.py selftest` round-trips both framings
+  (84 cases) so the implementation is at least self-consistent, but no shipped
+  file confirms the writer is the one that produced it.

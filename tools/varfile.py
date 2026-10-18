@@ -34,7 +34,8 @@ Tag table (all eighteen tags the writer can emit)
     0x31         string: u32 char-count ^ key, then chars (u16 ^ key16,
                  key advancing per char), then a **plain** u32 checksum
                  = 2n + 9 bytes total
-    0x32/0x33    binary blob, length-prefixed, rolling-rotate XOR
+    0x32         binary blob: u32 len ^ key, then dwords chained-xored
+    0x33         binary blob: u32 len ^ key, then len bytes stored verbatim
     0x40         array, count as u8 ^ key8    (only when count < 0xFF)
     0x41         array, count as u32 ^ key     (count >= 0xFF)
     0x50/0x51    narrow (UTF-8) string, u32 / u16 byte count, no checksum
@@ -185,24 +186,67 @@ class Reader:
         return raw.decode("utf-8", "replace")
 
     def blob(self):
-        """0x32: raw byte blob, `u32 len` then `len` bytes.
+        """0x32: binary blob.
 
-        In a varbin the payload is copied verbatim.  The `.var` writer
-        encrypts dword-at-a-time (VA 0x42C430), so it pads up to a multiple
-        of 4 and appends the final key; no `.var` in the install actually
-        uses the tag, so that branch is read from the writer but unproven.
+        Plain (varbin): `u32 len` then `len` raw bytes -- verified on the six
+        map payloads.
+
+        Encrypted (`.var`): the writer at VA 0x42C430 copies dword-at-a-time
+        with a *chained* xor.  The chain runs over the **plaintext** dword --
+        `mov eax, [edi-4]` re-reads the source buffer, not the output -- so
+
+            plain_i  = raw_i ^ key_i
+            key_i+1  = plain_i ^ rol32(key_i, 1)
+
+        and every 256th dword is followed by a redundant copy of the new key
+        (`cmp dl, 0xff` at 0x42C461).  A plain u32 copy of the *unchanged*
+        shared key terminates the blob.  No `.var` in the install uses this
+        tag, so this branch is read from the writer but never exercised; it
+        is validated by encoding with the same rule and decoding back.
         """
         n = self.u32()
         if self.plain:
             self.need(n, f"blob ({n} bytes) at 0x{self.p:x}")
             raw = self.b[self.p:self.p + n]
             self.p += n
-        else:
-            padded = (n + 3) & ~3
-            self.need(padded + 4, f"blob ({n} bytes) at 0x{self.p:x}")
-            raw = bytes(c ^ (self.key & 0xFF)
-                        for c in self.b[self.p:self.p + n])
-            self.p += padded + 4
+            self.blobs += 1
+            return raw
+
+        ndw = (n + 3) // 4
+        key = self.key
+        out = bytearray()
+        for i in range(ndw):
+            self.need(4, f"blob dword at 0x{self.p:x}")
+            w = struct.unpack_from("<I", self.b, self.p)[0]
+            self.p += 4
+            plain = w ^ key
+            out += struct.pack("<I", plain)
+            key = plain ^ rol(key, 1)
+            if (i & 0xFF) == 0xFF:
+                self.need(4, "blob pad dword")
+                self.p += 4
+        self.need(4, "blob trailer")
+        self.p += 4
+        self.blobs += 1
+        return bytes(out[:n])
+
+    def blob_verbatim(self):
+        """0x33: binary blob stored verbatim.
+
+        Writer VA 0x42C4CB: `u32 len ^ key`, then a straight `rep movsd` /
+        `rep movsb` copy -- **no** obfuscation of the bytes -- then a plain
+        u32 copy of the unchanged key.  Total `9 + len`.
+
+        Never occurs in any shipped `.var` or `varbin`; the plain form is
+        assumed to mirror 0x32 and drop the trailer, which is unproven.
+        """
+        n = self.u32()
+        self.need(n, f"verbatim blob ({n} bytes) at 0x{self.p:x}")
+        raw = self.b[self.p:self.p + n]
+        self.p += n
+        if not self.plain:
+            self.need(4, "verbatim blob trailer")
+            self.p += 4
         self.blobs += 1
         return raw
 
@@ -240,6 +284,8 @@ class Reader:
             return self.string()
         if t == 0x32:
             return self.blob()
+        if t == 0x33:
+            return self.blob_verbatim()
         if t == 0x51:
             return self.narrow(False)
         if t == 0x50:
@@ -483,9 +529,47 @@ def cmd_xref(a):
             print(f"  {ap:34s} -> {vp:44s} {name!r} [{kind}]")
 
 
+def cmd_selftest(a):
+    """Round-trip the two blob framings, which no shipped file exercises."""
+    def enc32(data, key):
+        n = len(data)
+        out = bytearray(b"\x32") + struct.pack("<I", n ^ key)
+        k = key
+        for i in range((n + 3) // 4):
+            raw = int.from_bytes(data[i * 4:i * 4 + 4].ljust(4, b"\0"), "little")
+            out += struct.pack("<I", raw ^ k)
+            k = raw ^ rol(k, 1)
+            if (i & 0xFF) == 0xFF:
+                out += struct.pack("<I", k)
+        return bytes(out + struct.pack("<I", key))
+
+    def enc33(data, key):
+        return (b"\x33" + struct.pack("<I", len(data) ^ key) + data
+                + struct.pack("<I", key))
+
+    bad = 0
+    sizes = (0, 1, 3, 4, 5, 7, 8, 255, 256, 257, 1000, 1023, 1024, 5000)
+    for n in sizes:
+        data = bytes((i * 37 + 11) & 0xFF for i in range(n))
+        for key in (0, 0xDEADBEEF, 0x269EC3):
+            for enc, tag in ((enc32, "0x32"), (enc33, "0x33")):
+                blob = enc(data, key)
+                rd = Reader(blob, key)
+                got = rd.value()
+                if got != data or rd.p != len(blob):
+                    bad += 1
+                    print(f"  FAIL {tag} n={n} key={key:#010x} "
+                          f"consumed {rd.p}/{len(blob)}")
+    print(f"{len(sizes) * 3 * 2} round-trips, {bad} failures")
+    return 0 if bad == 0 else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("selftest", help="round-trip the blob framings")
+    p.set_defaults(fn=cmd_selftest)
 
     p = sub.add_parser("stats", help="decode and summarise")
     p.add_argument("var")
