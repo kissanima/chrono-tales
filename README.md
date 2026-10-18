@@ -17,7 +17,7 @@ specification and findings log. This README is only an index.
 | Piece | State |
 |---|:--:|
 | `.gpak` container (pages, cipher, CRC, MPQ name hash, wrappers) | solved |
-| Filename recovery (hash → path) | 327 / 483 (68%) |
+| Filename recovery (hash → path) | 327 / 484 (68%) — the other 157 are 50 netpak varbin containers + 107 sysnet assets |
 | `.gbc` script source (uncompiled GBK DSL, 235 files) | solved |
 | `varbin` entity database (48 blobs, 19,640 records) | solved (byte-exact) |
 | `varbin` blob → game table (42 tables, 19,634 rows exported) | 42 / 48 (37 editors + 5 editor-less) |

@@ -249,7 +249,7 @@ unknown/05466923.jpg   -> tex/6b3e5253.jpg     '人类_男_战士7档_衣服_T' 
 unknown/2682c5d5.cmz   -> model/b056501a.cmz   '骑宠_机甲摩托1阶_M'  [模型]
 ```
 
-Overall name recovery goes from **231/483 (48%) to 327/483 (68%)** via
+Overall name recovery goes from **231/484 (48%) to 327/484 (68%)** via
 `varfile.py xref --merge tools/names.json`.
 
 The 50 netpak entries it cannot resolve are exactly the **42 varbin `.zip`

@@ -999,6 +999,8 @@ tools/gpak_write.py        writer: page/dir/free-list emitter, byte-exact rebuil
 tools/gpak_repack.py       CLI: roundtrip | fresh  (verifies the writer)
 tools/names.json           recovered filename table (hash -> path)
 tools/propagate_names.py   #include-graph filename propagation
+tools/apply_names.py       rename already-extracted unknown/* files once their
+                           hash has a path (avoids re-extracting 88 MB)
 tools/varfile.py           `.var` + `varbin` tagged-tree decoder (both modes)
 tools/varbin_tree.py       CLI: check | show | schema | csv  (tagged-tree view)
 tools/varbin_extract.py    entity DB: tokens | text | keys (label->value cross-tab)
@@ -1045,8 +1047,8 @@ in two stages.
 
 **Stage 1 — harvest & hash.** Pull every printable token from the decoded payloads
 (≈164k tokens, incl. GBK), expand them into ≈1.8M path candidates using the directory
-prefixes discovered from the corpus, hash each, and intersect with the 483 entry hashes.
-This alone yields **90 / 483**.
+prefixes discovered from the corpus, hash each, and intersect with the 484 entry hashes.
+This alone yields **90 / 484**.
 
 **Stage 2 — `#include` propagation.** The `.gbc` scripts are a dependency graph: a file
 whose name is known names the files it pulls in. Parse `#include "…"` and quoted asset
@@ -1054,7 +1056,7 @@ references out of every *named* script, resolve them relative to that script's o
 directory (`posixpath.join` / `normpath`), hash the result, and repeat until nothing new
 appears. Three rounds: `90 → 188 → 228 → 231`.
 
-- **231 / 483** entries now resolve to real paths, e.g. `tabedit/itemtabedit.gbc`,
+- **231 / 484** entries now resolve to real paths, e.g. `tabedit/itemtabedit.gbc`,
   `ui/bag/bagcom.gbc`, `country/en/trans.csv`, `world/terrain.gbc`, `ui/cooldown.png`,
   `SysFileVer.var` (2.4 MB).
 - Per archive: `sysnet` **229 / 336 (68%)**, `netpak` **2 / 148 (1%)**.
@@ -1062,14 +1064,46 @@ appears. Three rounds: `90 → 188 → 228 → 231`.
   decoded names directly against its hashes returns **zero** hits — its directory keys are
   produced somewhere else (another pak, or the server), so it stays hash-only.
 - A wrong name is impossible: a hit means the 32-bit hash collided, which for 1.8M
-  candidates against 483 targets is a ~0.2 expected false-positive count.
+  candidates against 484 targets is a ~0.2 expected false-positive count.
 
-Reproduce:
+**Stage 3 — the `.var` asset registry.** `SysFileVer.var` stores real paths for
+9,975 assets, and hashing them resolves 96 more entries that no amount of token
+harvesting reached: `231 → 327`. See [`SYSFILEVER.md`](SYSFILEVER.md) §5.
+
+Because extraction names entries when it runs, names recovered afterwards leave
+the tree stale — files keep sitting in `unknown/<hash>.<ext>` although the hash
+now has a path. `tools/apply_names.py` renames them in place instead of
+re-extracting 88 MB:
 
 ```bash
 python gpak_extract.py names gbox/lm_en/netpak.gpak gbox/lm_en/sysnet.gpak
 python propagate_names.py
+python varfile.py xref extracted/netpak/SysFileVer.var \
+                        extracted/netpak/_manifest.csv --merge tools/names.json
+python apply_names.py --apply
 ```
+
+Note the two hash encodings: `unknown/` filenames are **hex**, `names.json` keys
+are **decimal**. Comparing them directly reports zero overlap and makes it look
+as though nothing is recoverable.
+
+**What is left: 157 of 484.** The split is informative, not just a remainder:
+
+| archive | n | what |
+|---|---|---|
+| netpak | 50 | 42 `varbin` bundles + 8 `.bin` — **containers**, with no path reference anywhere |
+| sysnet | 107 | 63 png, 21 bin, 12 jpg, 8 gbc, 2 txt, 1 riff |
+
+The netpak half is not merely unsolved, it is unnameable: those are the entity-DB
+bundles, addressed by content, and §4.2's `GetAllData` finding explains why their
+keys are produced outside these archives.
+
+Script literals are exhausted as a source for the rest: harvesting every
+path-like literal from all 235 `.gbc` files yields 454 distinct strings, 65 of
+which are already-known names — so the method works — and **zero** of which
+resolve any of the 157. The scripts build image paths by runtime concatenation
+(`"ui/" + panel + "/bg.png"`), so only combinatorial assembly (dir fragment ×
+stem × ext) could close the remainder.
 
 ### Entity database
 
