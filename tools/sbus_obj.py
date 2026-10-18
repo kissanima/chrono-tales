@@ -59,10 +59,12 @@ def write_obj(parts, path, stem):
         out.append(f"g {stem}_p{p['part_index']}_{tag}")
         for v in p["verts"]:
             out.append("v %.5f %.5f %.5f" % tuple(v["pos"]))
+            out.append("vt %.6f %.6f" % tuple(v["uv"] if v["uv"] else (0.0, 0.0)))
             out.append("vn %.4f %.4f %.4f" % tuple(v["nrm"]))
         for f in p["faces"]:
+            # one v / vt / vn per vertex, so all three indices coincide
             a, b, c = f[0] + nv, f[1] + nv, f[2] + nv
-            out.append(f"f {a}//{a} {b}//{b} {c}//{c}")
+            out.append(f"f {a}/{a}/{a} {b}/{b}/{b} {c}/{c}/{c}")
         nv += len(p["verts"])
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
 

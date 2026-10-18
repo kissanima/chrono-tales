@@ -639,7 +639,9 @@ bytes; the shipped files are all rigid 1-bone so each record is **20 bytes**):
 ```
 u16 px, py, pz     pos = u16 * step + base, with step,base * 0.01
 u16 nx, ny, nz     nrm = u16 * 3.0518509447574615e-05 - 1.0   (VA 0x6D073C, 0x6CEC4C)
-[n_uv_sets x (u16,u16)]  uv = u16 * 3.05185e-5   (the first set is kept)
+[n_uv_sets x (u16,u16)]  uv = u16 * 3.05185e-5   (the first set is kept;
+                        the stored values never exceed 32767, so every
+                        decoded UV lands in [0,1] - verified on all 9 files)
 u8/u16 n            number of bone influences (1 in every shipped file)
 n x (u8 bone, u16 weight)   weight = u16 * 1e-4   (VA 0x6D457C, 10000 = 1.0)
 ```
@@ -828,13 +830,18 @@ strings (8,720 of them `@"…"`), 282 `csvr::call` server-RPC sites, 158 enums.
   and 19,640 records. Six blobs (`0580853e`, `66d2c4f3`, `d07f4acc`, `433267c3`,
   `e15a7343`, `c41c9276`) still desync mid-stream; forcing them invents tags, so they
   are left unexported rather than exported wrong.
-- `.cmz` `sbus` skin records: **container + per-part structure solved** (see §4.6) —
-  the `MESH` chunk is `n_parts` parts, each a length-prefixed GBK name + `sbus` blob
-  with a 32-byte header (part_index / A / B / bonecap). The 136-byte in-memory part
-  struct (stride from `0x19a2b0`) and the opaque `memcpy`'d blob (pointer at `+0x6c`)
-  are confirmed from `0x199307`. The **exact per-vertex (bone, weight) encoding inside
-  the blob is still open** — it is not a fixed `(bone, weight)` stride, so it must be
-  read by the mesh/skinning consumer; locating that routine is the remaining step.
+- `.cmz` `sbus` skin records are **solved** — see §4.6. The earlier note claiming a
+  32-byte / 7×u32 header was **wrong**: a `u8` flag sits between two `u32` fields, so
+  every aligned read of that header is off by one. Once unpacked, the blob is the
+  skinned geometry itself (positions, normals, UVs, weights, index buffer), which is
+  why it looked like an opaque integer blob. Two header fields remain unexplained:
+  `+21` (stored to struct `+0x10`, zero in all 9 files) and `+25` (count of an
+  8-byte-element side array, also zero). The `wide_influence` (u16 count) and
+  `n > 4` influences paths exist in the parser but are never exercised — every
+  shipped part is rigid, one bone per vertex — so the u16-bone variant implied by
+  the 512/1024 bonecaps is untested here.
+  `sbus_validate.py --strict` is the regression test: bone range, weight sum == 1,
+  unit normals and index range across all 9 files (6761 verts, 6146 tris).
 - `m_szType` codes are **editor widget types**, confirmed from the `switch` in
   `tabeditcom.gbc::FlipDlg`: `1` plain, `2` bitfield (2进制), `258` explanation
   (说明编辑), `512` task skill, `513` survey, `1024` group, `2048` flip-ex, `2049` path,
