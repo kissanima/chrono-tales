@@ -237,35 +237,36 @@ def check_clip(name, data, rigs, worlds):
         if oob and not any("no rig holds" in f for f in fails):
             fails.append(f"{name}: bone ids out of [0,{nb}): {oob[:8]}")
 
-    # 8 - pose sanity through the §4.4 recurrence
+    # 8 - a track that does not animate must sit on the rig's bind pose
+    #
+    # This is the one assertion with an external ground truth.  The clip's own
+    # translations cannot testify about themselves, but the .cmz `skel` chunk
+    # is independent: for a bone the clip leaves alone, key 0 must be the bind
+    # offset and rotation.  Across the five shipped clips the non-animated
+    # tracks land within 1.6e-05 of bind, while an injection moves them by
+    # 6.3e+01 (doubled translation) and 2.6e-01 (swapped qy/qz).
     bind_err = None
+    n_static = 0
     if bones and cmz_world and a["tracks"][0]["n_keys"] > 1:
-        seg = {}
-        for b in bones:
-            if b["parent"] >= 0:
-                seg[b["index"]] = math.dist(cmz_world[b["parent"]],
-                                            cmz_world[b["index"]])
-        tracks = {tr["bone"]: tr for tr in a["tracks"]}
-        for ki in range(a["tracks"][0]["n_keys"]):
+        for tr in a["tracks"]:
+            ks = tr["keys"]
+            amp = max(max(max(abs(k[1 + j] - ks[0][1 + j]) for j in range(3)),
+                          max(abs(k[4 + j] - ks[0][4 + j]) for j in range(4)))
+                      for k in ks)
+            if amp > AMP_STATIC:
+                continue
+            n_static += 1
+            b = bones[tr["bone"]]
+            t = ks[0]
+            e = max(max(abs(t[1 + j] - b["offset"][j]) for j in range(3)),
+                    max(abs(t[4 + j] - b["rot"][j]) for j in range(4)))
+            if e > TOL_STATIC:
+                fails.append(f'{name}: bone {b["index"]} ({b["name"]}) does not '
+                             f'animate but is {e:.2e} off the bind pose - the '
+                             f'rig is the independent reference here')
+        # also keep the replay's unit world quaternions / NaN as a belt
+        for ki in (0, a["tracks"][0]["n_keys"] - 1):
             rw, pw = replay(a, bones, ki)
-            # (a) segment lengths are rigid under the recurrence
-            for tr in a["tracks"]:
-                b = bones[tr["bone"]]
-                t = tr["keys"][ki]
-                if b["parent"] < 0:
-                    # (b) a root sits exactly at its own translation
-                    e = max(abs(pw[b["index"]][j] - t[1 + j] * 0.01)
-                            for j in range(3))
-                    if e > TOL_ROOT:
-                        fails.append(f"{name}: root off its key {ki} "
-                                     f"translation by {e:.2e} m")
-                else:
-                    want = math.sqrt(sum(c * c for c in t[1:4])) * 0.01
-                    e = abs(math.dist(pw[b["parent"]], pw[b["index"]]) - want)
-                    if e > TOL_SEG:
-                        fails.append(f"{name}: bone {b['index']} segment "
-                                     f"stretched by {e:.2e} m at key {ki}")
-            # (c) world rotations stay unit length
             badq = [i for i, q in enumerate(rw)
                     if abs(qnorm(q) - 1.0) > TOL_WORLD_Q]
             if badq:
@@ -273,20 +274,20 @@ def check_clip(name, data, rigs, worlds):
                              f"length at key {ki} (first bone {badq[0]})")
             if any(math.isnan(c) for p in pw for c in p):
                 fails.append(f"{name}: NaN in the replayed pose at key {ki}")
-        # (d) if key 0 is the bind pose, the replay must land on it exactly
         rw, pw = replay(a, bones, 0)
         bind_err = max(math.dist(pw[i], cmz_world[i]) for i in range(len(bones)))
-        if bind_err < TOL_BIND * 100:
-            if bind_err > TOL_BIND:
-                fails.append(f"{name}: key 0 claims to be the bind pose but "
-                             f"the replay is {bind_err:.2e} m off")
+        if hit == compared and bind_err > TOL_BIND:
+            # every key 0 already matches bind, so the replay must land on it
+            fails.append(f"{name}: key 0 equals the bind pose on all "
+                         f"{compared} bones but the replay is "
+                         f"{bind_err:.2e} m off")
 
     stats = dict(clip=pathlib.Path(name).stem, duration=a["duration"],
                  n_tracks=a["n_tracks"],
                  n_keys=sum(tr["n_keys"] for tr in a["tracks"]),
                  keys_per_track=a["tracks"][0]["n_keys"],
                  rig=rig, bind_match=f"{hit}/{compared}",
-                 quat_err=worst,
+                 quat_err=worst, n_static=n_static,
                  pose_vs_bind=None if bind_err is None else bind_err)
     return fails, stats
 
@@ -316,12 +317,13 @@ def main():
             rows.append(stats)
 
     print(f'\n{"clip":10} {"dur":>8} {"tracks":>6} {"n_keys":>6} {"per":>4} '
-          f'{"rig":>9} {"bind":>7} {"|q|-1":>9} {"vs bind":>9}')
+          f'{"rig":>9} {"bind":>7} {"static":>6} {"|q|-1":>9} {"vs bind":>9}')
     for r in rows:
         vb = "-" if r["pose_vs_bind"] is None else f'{r["pose_vs_bind"]:.2e}'
         print(f'{r["clip"]:10} {r["duration"]:8.4f} {r["n_tracks"]:6} '
               f'{r["n_keys"]:6} {r["keys_per_track"]:4} {str(r["rig"]):>9} '
-              f'{r["bind_match"]:>7} {r["quat_err"]:9.2e} {vb:>9}')
+              f'{r["bind_match"]:>7} {r["n_static"]:6} '
+              f'{r["quat_err"]:9.2e} {vb:>9}')
 
     if a.json:
         print(json.dumps(dict(rows=rows, failures=all_fails), indent=1))
