@@ -35,7 +35,6 @@ magic = flag + 0xFFABC257        shipped value 0xFFABC257, so flag = 0
 
 `flag` is a **seed**, not a version. The payload is protected by a rolling
 XOR key initialised to `flag`:
-
 ```
 key = (key * 214017 + 0x269EC3) & 0xFFFFFFFF
 ```
@@ -61,6 +60,42 @@ The key advances:
 Scalars never advance it. Because `flag == 0`, the very first key is `0`, so
 the opening scalars read as plaintext — which is exactly why the file looks
 half-decoded if you only skim the first few hundred bytes.
+
+### 1.0 A second seed exists: the packer manifest (`flag = 100`)
+
+The install contains **two more** `.var` files that do *not* start with
+`0xFFABC257`, so a magic check tuned to this file rejects them:
+
+| file | magic | flag (seed) |
+| --- | --- | --- |
+| `netpak/unknown/3602e346.bin` | `0xFFABC2BB` | **100** (`0x64`) |
+| `sysnet/unknown/3602e346.bin` | `0xFFABC2BB` | **100** (`0x64`) |
+
+Both decode with the same `varfile.load` unchanged — the seed is read from the
+magic as designed. They matter because they are the **first real data to
+exercise the encrypted branch** (string checksums + array trailers) other than
+`SysFileVer.var` itself, and it validates cleanly on both:
+
+| file | bytes | strings | checksum fails | array trailer fails |
+| --- | --- | --- | --- | --- |
+| `netpak/…/3602e346.bin` | 543,344 exact | 8,673 | 0 | 0 |
+| `sysnet/…/3602e346.bin` | 21,883 exact | 336 | 0 | 0 |
+
+This is the strongest evidence yet that the key schedule is right: two
+independent files, seeded `100` instead of `0`, with 9,010 strings and 9,011
+arrays between them and not one checksum or trailer mismatch. It also settles
+§6's open question about whether the encrypted path generalises beyond a
+zero seed — it does, for both.
+
+Payload shape is flat and small:
+
+```
+[ "FW405IGdT5", [ ["action/1062cc2c.zip", 79172, 1335165054], … ] ]
+```
+
+`[10-char build tag, [[path, size, mtime], …]]`. It is the **packer's own file
+list** — see `GPAK_FORMAT.md` §5 "Filename recovery" stage 4, which uses it to
+take name coverage from 327 to 433 of 484.
 
 ### 1.1 Tag table
 

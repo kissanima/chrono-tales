@@ -63,6 +63,9 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import varbin_tree                      # noqa: E402
+import varfile                           # noqa: E402
+import gpak                              # noqa: E402
+from gpak import unwrap, wrap_tag       # noqa: E402
 from obj_render import write_png        # noqa: E402
 
 OUT = HERE.parent / "extracted" / "maps"
@@ -195,86 +198,146 @@ def decode_models(field):
     return rows
 
 
+def decode_scene(blob_id, rec, out_dir, source):
+    """One `.zmap` record -> files on disk + a summary tuple.
+
+    Both map families share this: a varbin map payload's record is the whole
+    `.var` value, while an `intro/*.zmap` file holds the same record inside a
+    tagged wrapper.  By the time we get here the rec is identical.
+
+        rec = [MAP_VER, MAP_HEIGHTDATA, MAP_LAYERDATA, MAP_WIDGETDATA,
+               MAP_DATAEX, MAP_MODELDATA]
+    """
+    ver, height, layer, widget, dataex, models = rec
+
+    if ver != 100:
+        raise SystemExit(f"{blob_id}: MAP_VER is {ver}, expected 100")
+
+    stem = out_dir / blob_id
+    h = decode_height(height)
+
+    lay = decode_layer(layer)
+    write_png(out_dir / f"{blob_id}_layer.png",
+              lay["width"], lay["height"], bytearray(lay["pixels"]))
+
+    write_height_pngs(stem, h["grid"])
+
+    map_name, decos = decode_decos(widget)
+    mdl = decode_models(models)
+
+    layers = []
+    for i in range(6):
+        e = dataex[i] if i < len(dataex) else None
+        if isinstance(e, list):
+            layers.append({MAPLAYER[k]: flatten(e[k])
+                           for k in range(min(len(e), len(MAPLAYER)))})
+        else:
+            layers.append(None)
+
+    meta = {
+        "blob": blob_id,
+        "format": "zmap",
+        "source": source,
+        "map_name": map_name,
+        "version": ver,
+        "height": {k: h[k] for k in
+                   ("version", "a", "b", "c", "width", "height",
+                    "min", "max", "trailer")},
+        "height_patches": {"count": 2, "each": [129, 129],
+                           "z_world": [-50, 450],
+                           "z_of_value": "-50 + v * 500 / 255"},
+        "layer": {"version": lay["version"], "width": lay["width"],
+                  "height": lay["height"]},
+        "layers": layers,
+        "light": flatten(dataex[6]) if len(dataex) > 6 else None,
+        "path_layer_no": flatten(dataex[7]) if len(dataex) > 7 else None,
+        "fog_colour": flatten(dataex[8]) if len(dataex) > 8 else None,
+        "path_layer_no_ex": flatten(dataex[9]) if len(dataex) > 9 else None,
+        "decorations": len(decos),
+        "models": len(mdl),
+    }
+    (out_dir / f"{blob_id}.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    with open(out_dir / f"{blob_id}_models.csv", "w", newline="",
+              encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(FIXMODEL)
+        w.writerows(mdl)
+
+    with open(out_dir / f"{blob_id}_decos.csv", "w", newline="",
+              encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        if decos:
+            w.writerow(DECO_COLS[:len(decos[0])])
+            w.writerows(decos)
+
+    return (blob_id, map_name, h["min"], h["max"],
+            len(layers), len(decos), len(mdl))
+
+
+def intro_scenes():
+    """Yield (id, record, source_name) for every `intro/*.zmap` file.
+
+    These are **not** a separate format or a separate asset: they are the very
+    same six entries as `MAP_BLOBS`.  `cc5de97f` decodes to `intro/intro517493.zmap`
+    and `4514d98f` to `intro/intro517495.zmap` — the "six map payloads" and the
+    "six intro scenes" are one set of files, which is why their height headers
+    and record shapes are identical.
+
+    This walk exists as a cross-check: it reads the files from disk by name
+    instead of by hash, so if `varbin_tree.payloads()` ever loses them again the
+    two passes stop agreeing (see `main`).
+    """
+    src = varbin_tree.UNKNOWN.parent / "intro"
+    for f in sorted(src.glob("*.zmap")):
+        raw = f.read_bytes()
+        if wrap_tag(raw) != 0x602376D7:
+            raise SystemExit(f"{f.name}: unexpected wrapper {wrap_tag(raw)}")
+        d = varfile.load_varbin(unwrap(raw))
+        if d["consumed"] != d["total"]:
+            raise SystemExit(f"{f.name}: left "
+                             f"{d['total'] - d['consumed']} bytes undecoded")
+        yield f.stem, d["value"][0], f.name
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    payloads = dict(varbin_tree.payloads())
     summary = []
+    by_hash = {}
 
-    for blob_id in MAP_BLOBS:
-        rec = payloads[blob_id]["value"][0]
-        ver, height, layer, widget, dataex, models = rec
+    # The six map payloads inside netpak's varbin database.  Discovery is by
+    # content, not by name, so a renamed entry is still found.
+    for blob_id, d in varbin_tree.payloads():
+        if blob_id not in MAP_BLOBS:
+            continue
+        by_hash[blob_id] = d["value"][0]
+        summary.append(decode_scene(blob_id, d["value"][0], OUT, "varbin"))
 
-        if ver != 100:
-            raise SystemExit(f"{blob_id}: MAP_VER is {ver}, expected 100")
+    # Cross-check: the same six files, reached by path.  If these disagree with
+    # the walk above, one of the two id-resolutions is broken -- which is
+    # exactly the bug that made `payloads()` report 42 payloads instead of 48.
+    miss = [b for b in MAP_BLOBS if b not in by_hash]
+    if miss:
+        raise SystemExit(f"varbin walk missed {len(miss)} map payloads: {miss}")
+    on_disk = {}
+    for name, rec, fname in intro_scenes():
+        h = gpak.hash_name(f"intro/{fname}")
+        on_disk[f"{h:08x}"] = (name, rec)
+    if set(on_disk) != set(MAP_BLOBS):
+        raise SystemExit(f"intro files hash to {sorted(on_disk)}, "
+                         f"expected {sorted(MAP_BLOBS)}")
+    print(f"{len(on_disk)} intro/*.zmap files hash to exactly MAP_BLOBS — "
+          f"one asset set, two ways in")
 
-        stem = OUT / blob_id
-        h = decode_height(height)
-
-        lay = decode_layer(layer)
-        write_png(OUT / f"{blob_id}_layer.png",
-                  lay["width"], lay["height"], bytearray(lay["pixels"]))
-
-        write_height_pngs(stem, h["grid"])
-
-        map_name, decos = decode_decos(widget)
-        mdl = decode_models(models)
-
-        layers = []
-        for i in range(6):
-            e = dataex[i] if i < len(dataex) else None
-            if isinstance(e, list):
-                layers.append({MAPLAYER[k]: flatten(e[k])
-                               for k in range(min(len(e), len(MAPLAYER)))})
-            else:
-                layers.append(None)
-
-        meta = {
-            "blob": blob_id,
-            "format": "zmap",
-            "map_name": map_name,
-            "version": ver,
-            "height": {k: h[k] for k in
-                       ("version", "a", "b", "c", "width", "height",
-                        "min", "max", "trailer")},
-            "height_patches": {"count": 2, "each": [129, 129],
-                               "z_world": [-50, 450],
-                               "z_of_value": "-50 + v * 500 / 255"},
-            "layer": {"version": lay["version"], "width": lay["width"],
-                      "height": lay["height"]},
-            "layers": layers,
-            "light": flatten(dataex[6]) if len(dataex) > 6 else None,
-            "path_layer_no": flatten(dataex[7]) if len(dataex) > 7 else None,
-            "fog_colour": flatten(dataex[8]) if len(dataex) > 8 else None,
-            "path_layer_no_ex": flatten(dataex[9]) if len(dataex) > 9 else None,
-            "decorations": len(decos),
-            "models": len(mdl),
-        }
-        (OUT / f"{blob_id}.json").write_text(
-            json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
-
-        with open(OUT / f"{blob_id}_models.csv", "w", newline="",
-                  encoding="utf-8-sig") as f:
-            w = csv.writer(f)
-            w.writerow(FIXMODEL)
-            w.writerows(mdl)
-
-        with open(OUT / f"{blob_id}_decos.csv", "w", newline="",
-                  encoding="utf-8-sig") as f:
-            w = csv.writer(f)
-            if decos:
-                w.writerow(DECO_COLS[:len(decos[0])])
-                w.writerows(decos)
-
-        summary.append((blob_id, map_name, h["min"], h["max"],
-                        len(layers), len(decos), len(mdl)))
-
-    print(f"{'blob':10s} {'map':8s} {'hmin':>5s} {'hmax':>5s} "
+    print(f"\n{'blob':10s} {'map':8s} {'hmin':>5s} {'hmax':>5s} "
           f"{'lay':>4s} {'deco':>5s} {'model':>6s}")
     print("-" * 52)
     for s in summary:
         print(f"{s[0]:10s} {s[1]:8s} {s[2]:5d} {s[3]:5d} {s[4]:4d} "
               f"{s[5]:5d} {s[6]:6d}")
     print(f"\nwrote {len(summary)} maps -> {OUT}")
+
 
 
 if __name__ == "__main__":

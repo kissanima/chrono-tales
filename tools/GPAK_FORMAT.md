@@ -195,14 +195,26 @@ What the shipped data actually contains:
 | tag | count | payload |
 | --- | ----: | ------- |
 | `0x602376D7` | 48 | every real `varbin` (a ZIP whose single entry is named `varbin`) |
-| `0xBE119407` | 7 | small `*.bin` blobs (`[07 94 11 be]` + raw stream) |
+| `0xBE119407` | 7 | small `*.bin` tables — see §4.2.1 |
 | `0x8A8E9468` | 0 | recognised by the loader, never emitted by this build's packer |
 
-So the tag is not "unaccounted for" and it is not on *every* varbin either: the
-49th `*.zip` in the extraction (`c41c9276`) has no tag because it is not a
-varbin at all — its ZIP entry is `jumpdown.caf`, an audio asset. That single
-misfiled blob is also why it appeared in the list of `varbin` streams that
-"desync mid-stream" (§6).
+`0xBE119407` was previously written off here as "recognised but never emitted
+by this build". It is emitted seven times; the payloads are plain tagged var
+trees and they decode exactly. See §4.2.1.
+
+So the tag is not "unaccounted for" and it is not on *every* varbin either:
+the 49th `*.zip` in the extraction has no tag because it is not a varbin at all.
+
+**Correction — that blob is `e41c7990`, and it is not audio.** The entry
+`c41c9276` recorded here previously was a conflation: `e41c7990` *is*
+`C41C9276` (`gpak.hash_name("action/e41c7990.zip") == 0xC41C9276`), and the
+asset manifest resolves it to `action/e41c7990.zip`. That ZIP holds five
+**Cal3D skeletal animation clips** — `run.caf`, `stand01.caf`, `jumpdown.caf`,
+`jumping.caf`, `jumpstart.caf` — each starting `CAF\0`. The earlier reading as
+"`jumpdown.caf`, an audio asset" almost certainly came from the `.caf`
+extension also being Apple **Core Audio Format**; here it is character
+animation, and `netpak/action/` is the model action pack (43 `action/*.zip`
+paths are defined in the table `ziptabedit`, of which only this one ships).
 
 ---
 
@@ -510,7 +522,6 @@ every downstream count — which is exactly what happened when `actiontabedit.cs
 
 The framework also explains what `netpak` is. `tabeditcom.gbc::GetAllData` fetches rows
 over the network:
-
 ```
 csvr::call(GATENAME+"/"+m_sSvrName, "GetAllData", v)
 ```
@@ -526,6 +537,34 @@ text), `m_szType` (widget/type codes), `m_szFlip` (sub-field layouts) — plus
 documentation, e.g. 装备部位 enumerating all 20 equip slots and 属性构成 all 37
 attribute builds. That file is the lookup table for labelling any numeric field once
 its id is matched.
+
+### 4.2.1 The `0xBE119407` wrapper — seven more tables outside the varbin DB
+
+§2.7 lists three compression tags and notes that `0xBE119407` ("stored
+verbatim") is *"recognised but never emitted by this build."* That is wrong:
+seven `netpak` entries begin with it, for both the tag **and** the size/timestamp
+pair, so this is a second `.var` container that happens to live outside a ZIP.
+
+Each file is `u32 0xBE119407` followed by a **plain tagged var tree** — the
+same grammar `varfile.Reader(plain=True)` already reads for a varbin payload,
+just with the 4-byte tag stripped. All seven decode to their exact last byte:
+
+| id | bytes | rows × cols | what the content is |
+|---|---:|---|---|
+| `1cce069d` | 324 | 7 × 6 | UI shortcut actions: `打开商城` / `打开背包`, `是否打开` |
+| `ea6b3654` | 172 | 4 × 6 | level curve: `Level 1`, 50, 40000, 100 |
+| `b241fb00` | 746 | 6 × 16 | social/chat macros: `xingli`, `Salute`, `[发起者] salutes.` |
+| `d1fa89b8` | 979 | 11 × 15 | push-reward schedule: `推送奖励_20分钟`, `神秘礼物` |
+| `7ff704dc` | 42 | 1 × 8 | single config row |
+| `7278bb49` | 5 | 0 | empty table |
+| `c20fea4b` | 5 | 0 | empty table |
+
+They are **named tables**, not opaque blobs, so the count of genuinely
+unidentified `netpak` content drops accordingly. They are deliberately *not*
+folded into `varbin_tables.py`: that exporter's 42-table output is a load-bearing
+invariant (one-to-one editor assignment, §4.2), and these have no `tabedit`
+editor and no `varbin_identity.json` entry. Adding them there would also have
+to solve their missing column names, which no shipped editor supplies.
 
 ---
 
@@ -961,6 +1000,33 @@ with its own terrain. `SaveMapData` writes to
 `RESPATH + OnGetCopyName() + "/" + mapname + ".zmap"`, so the *copy* is what
 distinguishes them, not the map name.
 
+**They are also the six `intro/*.zmap` files, and that matters operationally.**
+Hashing those six paths resolves exactly the six map hashes:
+
+| hash | path |
+|---|---|
+| `cc5de97f` | `intro/intro517493.zmap` |
+| `6010fb33` | `intro/intro517494.zmap` |
+| `4514d98f` | `intro/intro517495.zmap` |
+| `da80ff38` | `intro/intro518493.zmap` |
+| `9feba4ac` | `intro/intro518494.zmap` |
+| `6b45f638` | `intro/intro518495.zmap` |
+
+So there is no such thing as "the six map payloads *and* six intro scenes" —
+they are one asset set reached two ways. The earlier reading of these as six
+unrelated copies plus a separate intro set was an artefact of looking at them
+through two different tools.
+
+This caused a real bug worth recording. `varbin_tree.payloads()` used to glob
+`extracted/netpak/unknown/*.zip`; once `apply_names.py` renamed these entries to
+their real paths they left `unknown/`, and the count silently fell **48 → 42**
+with no error raised. Any tool keyed on a path that naming can change is
+fragile this way. `payloads()` now discovers by **content** (the `0x602376D7`
+wrapper tag) anywhere under `netpak/`, and resolves the hash back through
+`names.json`, so renaming is a no-op for it. `map_decode.py` additionally
+cross-checks the hash-keyed walk against a path-keyed walk and fails loudly if
+they disagree.
+
 **Height field.** 12-byte header (`u16 2`, `u32 64176`, `u32 49864`, `u16
 0x4461`, identical in all six), then **129 × 258 bytes**, then a u32 trailer
 that is not crc32/adler32/sum. The grid is bytes, not `u16`: 45.3% of aligned
@@ -1106,6 +1172,52 @@ appears. Three rounds: `90 → 188 → 228 → 231`.
 9,975 assets, and hashing them resolves 96 more entries that no amount of token
 harvesting reached: `231 → 327`. See [`SYSFILEVER.md`](SYSFILEVER.md) §5.
 
+**Stage 4 — the packer's own manifest.** `unknown/3602e346.bin` in *both*
+archives is not an unknown blob: it is a `.var` file with **seed 100**
+(`magic = 0xFFABC257 + 0x64 = 0xFFABC2BB`) holding the file list the packer
+intended to ship. It decodes with the existing reader, byte-exactly, with zero
+checksum failures — the first time the *encrypted* `.var` branch has been
+exercised by real data, since `SysFileVer.var` uses seed 0.
+
+    [ "FW405IGdT5", [ ["action/1062cc2c.zip", 79172, 1335165054], ... ] ]
+
+`[build tag, [[path, size, mtime], ...]]`. Hashing those paths resolves every
+entry the manifest lists that actually shipped: **327 → 433 / 484 (89.5%)**,
+of which 106 are newly named and 32 were already known under different casing.
+There were **zero** real conflicts — `hash_name` lower-cases internally, so the
+manifest's casing is cosmetic — which independently re-validates every name
+recovered in stages 1–3.
+
+```bash
+python asset_manifest.py check        # both decode byte-exactly
+python asset_manifest.py stats        # per-directory listed/missing
+python asset_manifest.py names        # dry run; --apply to merge
+python asset_manifest.py csv -o m.csv # all 9,007 manifest rows
+```
+
+What the manifest reveals is more useful than the names. The packer's list is
+**9,007 paths**, but only 432 of them are in the archives:
+
+| archive | listed | shipped | note |
+|---|---:|---:|---|
+| netpak | 8,672 | 97 | **8,575 listed paths are absent** |
+| sysnet | 335 | 335 | ships in full |
+
+`netpak` is a **1.1% sample of a much larger asset tree**: `tex` alone lists
+2,156 files of which 2,120 are missing, `model` 2,107 (2,076 missing), `effect`
+1,795 (1,790 missing), and there are 405 map paths, 407 `action/*.zip` clips,
+751 `chipmap` entries. So the install is a stripped retail cut, not a complete
+client. This also explains why §4.5 could not find a name→GUID table in the
+shipped client — the manifest *does* name the models that do ship, but the bulk
+of the art was never delivered.
+
+Consequence for the residual unknown set: `sysnet` is now **335 / 336** named
+(the last one is this manifest itself). `netpak` stays at **51 / 148**, and the
+manifest confirms that set is abiological containers rather than a lookup
+failure: 42 `varbin` bundles, the 8 `BE119407`-wrapped tables, `SysFileVer.var`
+itself (`D7E9272B`, 2,405,900 B — the only netpak entry whose size is not a round
+number), and this manifest. None of them has a path.
+
 Because extraction names entries when it runs, names recovered afterwards leave
 the tree stale — files keep sitting in `unknown/<hash>.<ext>` although the hash
 now has a path. `tools/apply_names.py` renames them in place instead of
@@ -1123,21 +1235,24 @@ Note the two hash encodings: `unknown/` filenames are **hex**, `names.json` keys
 are **decimal**. Comparing them directly reports zero overlap and makes it look
 as though nothing is recoverable.
 
-**What is left: 157 of 484.** The split is informative, not just a remainder:
+**What is left: 51 of 484** (was 157 before stage 4). The split is informative,
+not just a remainder:
 
 | archive | n | what |
 |---|---|---|
-| netpak | 50 | 42 `varbin` bundles + 8 `.bin` — **containers**, with no path reference anywhere |
-| sysnet | 107 | 63 png, 21 bin, 12 jpg, 8 gbc, 2 txt, 1 riff |
+| netpak | 51 | 42 `varbin` bundles + 8 `BE119407` tables + `SysFileVer.var` + the manifest — **containers**, with no path reference anywhere |
+| sysnet | 1 | the manifest itself (`3602e346.bin`) |
 
 The netpak half is not merely unsolved, it is unnameable: those are the entity-DB
 bundles, addressed by content, and §4.2's `GetAllData` finding explains why their
-keys are produced outside these archives.
+keys are produced outside these archives. Every *asset* in both archives now has
+a path.
 
 Script literals are exhausted as a source for the rest: harvesting every
 path-like literal from all 235 `.gbc` files yields 454 distinct strings, 65 of
 which are already-known names — so the method works — and **zero** of which
-resolve any of the 157. The scripts build image paths by runtime concatenation
+resolve any of the names that were still missing before stage 4. The scripts
+build image paths by runtime concatenation
 (`"ui/" + panel + "/bg.png"`), so only combinatorial assembly (dir fragment ×
 stem × ext) could close the remainder.
 

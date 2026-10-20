@@ -27,13 +27,65 @@ import varfile  # noqa: E402
 UNKNOWN = pathlib.Path("extracted/netpak/unknown")
 
 
+def _load_names():
+    """path(lowercased) -> 8-hex hash, for entries whose name was recovered."""
+    try:
+        names = json.load(open(HERE / "names.json", encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return {p.lower(): f"{int(h):08x}" for h, p in names.items()}
+
+
+_NAMES = _load_names()
+
+
+def _hash_of(f):
+    """Recover the 8-hex archive hash for a payload file, by path or by name.
+
+    Entries still in `unknown/` are named `<hash>.zip`.  An entry whose name was
+    recovered is named after its path instead (`intro/intro517493.zmap`), so the
+    hash has to come from the name table.  Fall back to the file's own stem when
+    it is already 8 hex digits.
+    """
+    stem = f.name.split(".")[0]
+    if len(stem) == 8 and all(c in "0123456789abcdefABCDEF" for c in stem):
+        return stem.lower()
+    if _NAMES is None:
+        return None
+    rel = pathlib.PurePosixPath(*f.relative_to(UNKNOWN.parent).parts).as_posix()
+    return _NAMES.get(rel.lower())
+
+
 def payloads():
-    """Yield (id, decoded) for every varbin payload in the install."""
-    for f in sorted(UNKNOWN.glob("*.zip")):
-        raw = f.read_bytes()
-        if wrap_tag(raw) != 0x602376D7:
+    """Yield (id, decoded) for every varbin payload in the install.
+
+    Discovery is a search, not a glob of one directory: `apply_names.py`
+    renames recognised entries in place, so a payload whose hash has a path
+    (`4514d98f` -> `intro/intro517493.zmap`) leaves `unknown/` behind.  Globbing
+    `unknown/*.zip` therefore silently under-reports -- it drops exactly the
+    payloads whose names were recovered, which is the opposite of what you want.
+
+    Any file anywhere under `extracted/netpak/` that starts with the
+    `0x602376D7` wrapper tag is a candidate.  The id is resolved back to the
+    archive hash so every consumer keeps working across a rename.
+    """
+    root = UNKNOWN.parent.parent          # extracted/netpak -> extracted
+    seen = set()
+    for f in sorted((root / "netpak").rglob("*")):
+        if not f.is_file() or f.suffix.lower() in (".csv", ".json", ".png",
+                                                   ".jpg", ".jpeg", ".bmp",
+                                                   ".tga", ".dds"):
             continue
-        yield f.stem, varfile.load_varbin(unwrap(raw))
+        try:
+            if f.stat().st_size < 8 or f.read_bytes()[:4] != b"\xd7\x76\x23\x60":
+                continue
+        except OSError:
+            continue
+        hid = _hash_of(f)
+        if hid is None or hid in seen:
+            continue
+        seen.add(hid)
+        yield hid, varfile.load_varbin(unwrap(f.read_bytes()))
 
 
 def shape(v):

@@ -3,7 +3,8 @@
 Reverse engineering of the 2013 **Chrono Tales** (`时光之刃`-era) Windows client, a
 native D3D9 game on the in-house **GBox2** engine. The game ships as two `.gpak`
 archives plus a launcher; this repo reconstructs the archive format, the embedded
-script language, the entity database, and the mesh/skeleton/texture formats.
+script language, the entity database, the animation clips, and the
+mesh/skeleton/texture formats.
 
 The client binary is `gbox/lm_en/chronotales.exe` (4.1 MB, statically linked
 zlib 1.1.3/1.1.4, debug paths pointing at `E:\GBox2\src\...`).
@@ -17,7 +18,7 @@ specification and findings log. This README is only an index.
 | Piece | State |
 |---|:--:|
 | `.gpak` container (pages, cipher, CRC, MPQ name hash, wrappers) | solved |
-| Filename recovery (hash → path) | 327 / 484 (68%) — the other 157 are 50 netpak varbin containers + 107 sysnet assets |
+| Filename recovery (hash → path) | 433 / 484 (89.5%) — the 51 left are all netpak *containers* (42 `varbin` bundles, 8 `BE119407` tables, `SysFileVer.var`); every asset in both archives now has a path |
 | `.gbc` script source (uncompiled GBK DSL, 235 files) | solved |
 | `varbin` entity database (48 blobs, 19,640 records) | solved (byte-exact) |
 | `varbin` blob → game table (42 tables, 19,634 rows exported) | 42 / 48 (37 editors + 5 editor-less) |
@@ -26,6 +27,7 @@ specification and findings log. This README is only an index.
 | `.cmz` skeleton + bind pose | solved |
 | `.cmz` `sbus` skinned geometry + index buffer | solved |
 | `SysFileVer.var` asset registry (9,975 records) | solved |
+| Packer manifest (`0xBE119407`-free `.var`, seed 100) | solved — holds the pack's intended file list |
 | Texture path convention (`model/<GUID>.fw3`, `tex/<GUID>.<ext>`) | solved |
 | Texture GUID → filename | solved (5,672 pairs, `tools/guid_names.csv`) |
 | Unified browser over every recovered dataset | `extracted/explorer/index.html` |
@@ -78,6 +80,12 @@ python tools/varbin_identify.py          # blob -> game table
 python tools/varbin_tables.py            # -> extracted/tables/*.csv
 python tools/map_decode.py               # 6 .zmap maps -> extracted/maps/
 python tools/build_explorer.py           # -> extracted/explorer/index.html
+
+# asset manifest -> filenames
+python tools/asset_manifest.py check     # both manifests decode byte-exactly
+python tools/asset_manifest.py stats     # listed vs shipped, per directory
+python tools/asset_manifest.py names     # dry run; --apply merges into names.json
+python tools/apply_names.py --apply      # rename the extracted tree in place
 
 # asset registry
 python tools/varfile.py stats extracted/netpak/SysFileVer.var
