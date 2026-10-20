@@ -1089,6 +1089,185 @@ linkable. Every figure displayed is computed from the generated data — the two
 `_manifest.json` files, `models/_index.json`, `gbc_index/data.json` — never
 hardcoded, so a count cannot drift from the data it describes.
 
+### 4.9 `.caf` — character animation (Cal3D `CalCoreAnimation`) — **SOLVED**
+
+> **Status: byte-exact on all 5 shipped clips.** One clip per file, a flat
+> track table, 32-byte keyframes. This is **stock libcal3d**, not a GBox
+> container: there are no reversed tags, no packed headers and no chunk
+> directory. Everything below is read off the loader, not inferred.
+
+Five `.caf` files ship, all inside the ZIP `netpak/action/e41c7990.zip`
+(member of a plain archive, no `0x602376D7` wrapper):
+
+| clip | bytes | duration | tracks | keys | key0 vs bind pose |
+|---|---:|---:|---:|---:|---|
+| `jumpdown.caf` | 12,744 | 0.266667 s | 43 | 387 (9/track) | 35/43 |
+| `jumping.caf` | 12,744 | 0.266667 s | 43 | 387 (9/track) | 41/43 |
+| `jumpstart.caf` | 12,744 | 0.266667 s | 43 | 387 (9/track) | **43/43** |
+| `run.caf` | 22,376 | 0.500000 s | 43 | 688 (16/track) | 28/43 |
+| `stand01.caf` | 22,376 | 0.500000 s | 43 | 688 (16/track) | 29/43 |
+
+**Where the loader is.** `CalCoreAnimation::load` at VA **`0x5ABF70`**, its
+per-track parser `CalCoreTrack::load` at VA **`0x5ABD90`**. Both name
+`E:\GBox2\src\client\cal3d\src\coreanimation.cpp` (file offset `0x36a4C4`,
+vector at `0x76A4C4`), and the track-delay assert string
+`"loadCoreAnimation track delay err"` is at `0x76A4C4`. The magic dword
+`'CAF\0'` = `0x00464143` is compared through a pointer at VA `0x6D4620`
+(`mov ecx, 0x6d4620 / cmp ebx, [ecx]` at `0x5ABFBB`), and occurs exactly once
+in the binary — so, like `sbus`, there is **no writer** shipped with the client.
+
+**File layout.**
+
+```
+0x00  char[4]  "CAF\0"
+0x04  u32      version        699..1100 accepted (0x5ABFDA / 0x5ABFE5); all 5 are 1000
+0x08  f32      duration       seconds, must be > 0 (0x5AC010 tests against 0.0)
+0x0C  u32      n_tracks       = 43 in every clip
+      then n_tracks x {
+          u32  bone_id      must be >= 0 (0x5ABDC4)
+          u32  n_keys       must be > 0  (0x5ABDEE)
+          n_keys x 32-byte keyframe {
+              f32  time
+              f32  tx, ty, tz           centimetres  (* 0.01)
+              f32  qx, qy, qz, qw       inverse local rotation
+          }
+      }
+```
+
+**How each field's role was established.** The parser reads `bone_id` then
+`n_keys`, allocates `n_keys << 5` bytes at `0x5ABE00`, and `rep movs` the keys
+in verbatim — so a key is exactly 32 bytes and nothing is decoded per key.
+It then multiplies exactly three floats by `0.01` (`fmul [0x6D0738]` at
+`0x5ABE94`, `0x5ABE9D`, `0x5ABEB3`) and copies four at `key+0x10`.
+`key+0` is never touched, which makes it the time; the three scaled floats are
+the translation; the four copied ones are the quaternion. Finally it sets the
+track's playback step to `keys[1].time - keys[0].time` when `n_keys > 2`
+(`0x5ABE58`-`0x5ABE5D`), else to the constant `0.03333` (`0x3D08850A`, written
+at `0x5ABE4C`).
+
+The animation loader then walks the tracks and **enforces that every track
+agrees with track 0 on that step to within `0.001`** — `fsub`, `fabs`,
+`fcomp qword [0x6D4628]` (= `1e-3`), `test ah,0x41` at `0x5AC0E4`, else the
+`"track delay err"` assert. This is a structural condition the format itself
+guarantees, and the validator reuses it rather than inventing one.
+
+**Corrections to the earlier reading.** Three claims in the briefing were
+wrong, and they were wrong for the same reason — treating a float as an
+integer:
+
+- **`+0x04` is not `ticksPerSecond`.** It is the **format version**, and the
+  loader rejects anything outside `699..1100`. `1000` is `CAF_VERSION`, whose
+  value in stock libcal3d is also 1000 — a coincidence that made the mistake
+  plausible.
+- **`+0x08` is not `n_bones`.** It is a **float duration**. `0x3E888889` is
+  `0.266666681` = **8/30 s**, and `0x3F000000` is `0.5` = **15/30 s**. Read as
+  an int these are "1049135241 bones" and "1056964608 bones", which is what
+  produced the "43 bones vs a float, check this" note in the brief. There is no
+  ambiguity: the field is a duration, and it equals the final keyframe time of
+  every track to f32 precision.
+- **`+0x0C` is not `n_anims = 5`.** It is **`n_tracks = 43`**. A `.caf` holds
+  exactly one clip; the "5" came from the number of files.
+
+The float interpretation is not a guess. It is forced three ways at once: the
+loader `fld`s the word and compares it against `0.0` rather than range-checking
+an integer; the value tracks `8/30` and `15/30` exactly; and it equals the last
+key time in all five files. An integer bone count has no reason to satisfy any
+of those.
+
+**Keyframe grid.** Times are `i/30` to within `1.4e-8` (they are f32), the step
+is `1/30 s`, and all 43 tracks in a clip share one grid. `jumpstart`/`jumping`/
+`jumpdown` hold 9 keys each (0 .. 0.2666 s), `run`/`stand01` hold 16
+(0 .. 0.5000 s). The final key time equals the header duration exactly.
+
+**Pose convention — same as `.cmz` §4.4.** Rotations are the *inverse* of the
+bone→parent rotation, so `R_world[i] = R_world[parent] * conj(q[i])`; the
+translation is in centimetres (`* 0.01`); frame is metres, **+Z up**. The
+convention was not assumed: replaying `jumpstart.caf` key 0 through the §4.4
+recurrence reproduces the `.cmz` bind pose to **8.3e-07 m** across all 43
+bones, which is f32 round-off. That is a decisive, zero-parameter match — a
+wrong quaternion order or a missing conjugation cannot land on an independently
+derived pose.
+
+**Which skeleton these drive.** All five clips bind to **`2682c5d5`**, the
+43-bone rig. Scoring every decoded `.cmz` by "how many bones' key 0 equals the
+bind pose" gives **35–43 / 43** for `2682c5d5` and **0 / 43** for all eight
+109- and 119-bone rigs — no partial credit anywhere. `jumpstart.caf` is exact on
+all 43 bones, which is what pins the mapping.
+
+The clips are deliberately leaner than the humanoid rigs: 31 of the 43 bone
+names also exist in the 119-bone humanoid, but only 8 of those share an index,
+and 12 bones (`Bip01 F Lun`, `tf`, `Bip01 B Lun`, `tb`, `Bip01 An`, `q`,
+`Bip01 penqi01`–`04`, `s`, `w`) exist only on the 43-bone rig. So a 43-track
+clip is **not** index-compatible with a 119-bone character and must be remapped
+by name, not by track position. That is a real constraint for anyone animating
+the humanoid meshes, and the decoder does not paper over it.
+
+**Tracks that do not animate are not held at the bind pose.** Nearly every
+track still varies in the last few decimal places (amplitudes of `4e-6` ..
+`2e-5`), so a "constant track" test with a tight threshold finds **0/43**. The
+variation is f32 noise from the exporter's resampling, not motion: it is two to
+four orders of magnitude below the animated bones (`1e-2` .. `4e+1`). This is
+the §6 trap in a new place — a threshold tuned to "constant" would report the
+format as broken, and a threshold tuned to "moving" would report 43 animated
+bones in every clip.
+
+**Validation** (`tools/caf_validate.py --strict`, 5/5 clips):
+
+- the stream is **fully consumed** on all 5 files — the last key ends on the
+  final byte, with no slack (this is what `caf_decode.py check` asserts);
+- `version` in `699..1100`, `duration > 0`, and `duration ==` final key time;
+- every track in a clip has the same key count and byte-identical time column,
+  and the step is `1/30` — the loader's own assert, re-implemented;
+- key times strictly increase and lie in `[0, duration]`;
+- every keyframe quaternion is unit length (worst error `6.7e-08`);
+- every bone id is in `[0, 43)`, no id repeats, and `n_tracks ==` the rig's
+  bone count;
+- replaying each clip through the §4.4 recurrence preserves every bone
+  segment's length to `1.5e-07 m`, pins each root exactly on its own keyframe
+  translation, and keeps all 43 world quaternions unit length.
+
+Each check was confirmed to **fail on a deliberately corrupted file**, so none
+of them is vacuous. Nine mutants (version `5000`, truncated `n_tracks`, a
+retargeted duration, a scaled quaternion, a duplicated bone id, an out-of-range
+bone id, a negative key time, a byte inserted into the key stream) are all
+caught, and the negative fixtures live in `work/caf_neg/` (gitignored).
+
+**One check that had to be withdrawn.** The first version of the validator
+asserted the replayed figure's height lay in `1.0..2.5 m`, on the grounds that
+the humanoid rigs are 1.754 m. That failed on `jumping.caf` at `2.548 m` — and
+the failure was **the test's fault, not the decoder's**. `jumping.caf` rotates
+the root **21.23° about +X** relative to the bind pose, which swings the rig's
+2.05 m of +Y bone length into +Z and legitimately grows the bounding box. A
+height bound measures the pose, not the decode, so it was replaced by the
+rotation-invariant checks above (rigid segment lengths, root pinned to its own
+translation, unit world quaternions). This is the "right answer for the wrong
+reason" trap from §6 running in reverse: a check can also give a *wrong* answer
+for a plausible reason.
+
+**What is not claimed.** The five clips are 2 of the **407** `action/*.zip`
+paths the manifest lists, so this is a sample, not the animation set. The clip
+names are not animation *kind* names: the exe embeds a `#enum` and a table at
+file offset `0x3F0CC6` / `0x3F0D76` (VA `0x7F0CC6` / `0x7F0D76`)
+
+```
+#enum MAN_ANI_STAND,MAN_ANI_JUMPING,MAN_ANI_RUN,MAN_ANI_JUMPSTART,MAN_ANI_JUMPDOWN,MOVE_ANI_SLIDEEND,MOVE_ANI_SWIM
+var m_szAniDef=(("01stand",2),("jumping",12),("03run",2.5),("jumpstart",31),("jumpdown",31),("jumping",8));
+```
+
+which names `01stand` and `03run` — **not** `stand01`/`run` — and maps each kind
+to a *playback speed*, not a file. The four filenames that do appear
+(`jumping`, `jumpdown`, `jumpstart`; `stand01` does not) are in a quoted block
+(`/* … */`) of a superseded style, so this table does **not** establish the
+model→clip binding. That binding remains open; `stand01` matching
+`SetAniKind("stand01")` is still the only evidence, and it is name-literal, not
+structural.
+
+`tools/caf_decode.py` → `extracted/models/caf/*.json` (one per clip: header,
+`rig`, and per-track `bone` / `n_keys` / `keys`, each key being
+`[time, tx, ty, tz, qx, qy, qz, qw]` with translations still in centimetres as
+stored). `tools/caf_decode.py check` is the byte-exact assertion;
+`tools/caf_validate.py --strict` is the regression test.
+
 ---
 
 ## 5. The pipeline
