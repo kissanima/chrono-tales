@@ -1096,8 +1096,11 @@ hardcoded, so a count cannot drift from the data it describes.
 > container: there are no reversed tags, no packed headers and no chunk
 > directory. Everything below is read off the loader, not inferred.
 
-Five `.caf` files ship, all inside the ZIP `netpak/action/e41c7990.zip`
-(member of a plain archive, no `0x602376D7` wrapper):
+Five `.caf` files ship, all inside the ZIP `netpak` entry `e41c7990` =
+`action/e41c7990.zip` (a plain archive, no `0x602376D7` wrapper). The archive's
+own name hash is `hash_name("action/e41c7990.zip") = 0xC41C9276`, which is why
+older notes in this repo call the same entry `c41c9276`; that is the *hash*, the
+entry id is `e41c7990`.
 
 | clip | bytes | duration | tracks | keys | key0 vs bind pose |
 |---|---:|---:|---:|---:|---|
@@ -1189,10 +1192,30 @@ wrong quaternion order or a missing conjugation cannot land on an independently
 derived pose.
 
 **Which skeleton these drive.** All five clips bind to **`2682c5d5`**, the
-43-bone rig. Scoring every decoded `.cmz` by "how many bones' key 0 equals the
-bind pose" gives **35–43 / 43** for `2682c5d5` and **0 / 43** for all eight
-109- and 119-bone rigs — no partial credit anywhere. `jumpstart.caf` is exact on
-all 43 bones, which is what pins the mapping.
+43-bone rig, whose bind height is **1.565 m** (world Z spans 0.207 .. 1.772).
+Scoring every decoded `.cmz` by "how many bones' key 0 equals the bind pose"
+gives **35–43 / 43** for `2682c5d5` and **0 / 43** for all eight 109- and
+119-bone rigs — no partial credit anywhere. `jumpstart.caf` is exact on all 43
+bones, which is what pins the mapping.
+
+**What that rig is — and what is still unclear.** Its bone names are a
+standard 3ds Max **Biped** humanoid: `Bip01`, `Bip01 Pelvis`,
+`Spine`/`Spine1`, `Neck`, `Head`, `HeadNub`, `L/R Clavicle` → `UpperArm` →
+`Forearm` → `Hand` → `Finger0`, `L/R Thigh` → `Calf` → `Foot` → `Toe0`, and
+`Footsteps`. So the skeleton is a humanoid character, not a vehicle.
+
+But the *same* file also carries five `sbus` mesh parts and a `MAP1` name of
+`机甲摩托_轮子` ("mech motorcycle **wheel**"), and 13 of its 43 bones are not
+Biped bones at all: `t`, `tf`, `Bip01 F Lun`, `Bip01 B Lun`, `tb`,
+`Bip01 An`, `q`, `Bip01 penqi01`–`04` (`penqi` = 喷气, "jet"), `s`, `w`. Note
+that §4.6's list of five mech part names (front wheel / rear wheel / body /
+front / mudguard) does not match what `cmz.py` reports for this file's `MESH`
+chunk today (five parts named `s`, `MAP1` = wheel), so the two readings of this
+rig are not yet reconciled. **The honest statement is: humanoid Biped skeleton
+plus wheel/jet attachment bones, with mech wheel geometry attached.** Whether
+that is a rider-on-mech rig, a reused Biped, or a partially-named export is
+**open**, and the bone names are stronger evidence than the part labels — but
+they do not by themselves explain the part labels either.
 
 The clips are deliberately leaner than the humanoid rigs: 31 of the 43 bone
 names also exist in the 119-bone humanoid, but only 8 of those share an index,
@@ -1211,10 +1234,12 @@ the §6 trap in a new place — a threshold tuned to "constant" would report the
 format as broken, and a threshold tuned to "moving" would report 43 animated
 bones in every clip.
 
-**Validation** (`tools/caf_validate.py --strict`, 5/5 clips):
+**Validation** (`tools/caf_validate.py --strict`, 5/5 clips, exit 0):
 
 - the stream is **fully consumed** on all 5 files — the last key ends on the
-  final byte, with no slack (this is what `caf_decode.py check` asserts);
+  final byte, with no slack (this is what `caf_decode.py check` asserts, and it
+  is the only real proof of the *layout*: a wrong stride or a wrong field role
+  cannot survive it);
 - `version` in `699..1100`, `duration > 0`, and `duration ==` final key time;
 - every track in a clip has the same key count and byte-identical time column,
   and the step is `1/30` — the loader's own assert, re-implemented;
@@ -1222,32 +1247,48 @@ bones in every clip.
 - every keyframe quaternion is unit length (worst error `6.7e-08`);
 - every bone id is in `[0, 43)`, no id repeats, and `n_tracks ==` the rig's
   bone count;
-- replaying each clip through the §4.4 recurrence preserves every bone
-  segment's length to `1.5e-07 m`, pins each root exactly on its own keyframe
-  translation, and keeps all 43 world quaternions unit length.
+- **a track that does not animate must equal the `.cmz` bind pose** (motion
+  under `1e-3`; 25–41 tracks per clip qualify, worst deviation `1.6e-05`).
+  This is the one assertion with an **external** ground truth — the rig comes
+  from a different file — and it is what catches semantic corruption.
 
-Each check was confirmed to **fail on a deliberately corrupted file**, so none
-of them is vacuous. Nine mutants (version `5000`, truncated `n_tracks`, a
-retargeted duration, a scaled quaternion, a duplicated bone id, an out-of-range
-bone id, a negative key time, a byte inserted into the key stream) are all
-caught, and the negative fixtures live in `work/caf_neg/` (gitignored).
+**What the validator can and cannot catch.** This is stated plainly because a
+green check that cannot fail is worse than none. Checks 1–3 above are hard and
+independent: a wrong stride, a wrong header interpretation or a wrong field
+role breaks them immediately. The bind-pose check catches semantic damage to
+any bone the clip leaves alone. **But there is no ground truth for a bone a
+clip actually animates**, so a wrong quaternion convention or a swapped
+translation axis applied to a *moving* track would pass — layout correctness
+for those rests on byte-exactness, not on this tool.
 
-**One check that had to be withdrawn.** The first version of the validator
-asserted the replayed figure's height lay in `1.0..2.5 m`, on the grounds that
-the humanoid rigs are 1.754 m. That failed on `jumping.caf` at `2.548 m` — and
-the failure was **the test's fault, not the decoder's**. `jumping.caf` rotates
-the root **21.23° about +X** relative to the bind pose, which swings the rig's
-2.05 m of +Y bone length into +Z and legitimately grows the bounding box. A
-height bound measures the pose, not the decode, so it was replaced by the
-rotation-invariant checks above (rigid segment lengths, root pinned to its own
-translation, unit world quaternions). This is the "right answer for the wrong
-reason" trap from §6 running in reverse: a check can also give a *wrong* answer
-for a plausible reason.
+That limit is not hypothetical: an earlier version of this validator asserted
+"rigid bone segment length" and "root sits at its own translation" by
+recomparing the replay against numbers derived from the *same* corrupt input.
+Those assertions are tautological and `TOL_SEG` could never fire — a doubled
+bone translation or a swapped `qy`/`qz` passed silently. They were **removed**
+and replaced by the bind-pose comparison, which fails on both
+(`6.31e+01` and `2.58e-01` respectively). A third bound, on the figure's
+*height*, was also withdrawn: `jumping.caf` rotates the root **21.23° about
++X**, swinging the rig's 2.05 m of +Y bone length into +Z, so the bounding box
+legitimately grows from 1.565 m to **2.548 m**. A height bound measures the
+pose, not the decode.
 
-**What is not claimed.** The five clips are 2 of the **407** `action/*.zip`
-paths the manifest lists, so this is a sample, not the animation set. The clip
-names are not animation *kind* names: the exe embeds a `#enum` and a table at
-file offset `0x3F0CC6` / `0x3F0D76` (VA `0x7F0CC6` / `0x7F0D76`)
+Deliberately **not** a failure: scaling the root's translation. A root's
+translation is the character's world motion and has no bind-pose constraint,
+so the validator must leave it free.
+
+Each check was confirmed to fail on a deliberately corrupted file. Mutants that
+produce exit 1: version `5000`, retargeted `n_tracks`, a retimed duration, a
+scaled quaternion, a duplicated bone id, an out-of-range bone id, a negative
+key time, a byte inserted into the key stream, a doubled translation on a
+static bone, and a swapped `qy`/`qz` on a static bone. Fixtures live in
+`work/caf_neg/` (gitignored).
+
+**What is not claimed.** The five clips are 1 of the **406** `action/*.zip`
+paths the manifest lists (the 407th path is `action/火炎弹.txt`), so this is a
+sample, not the animation set. The clip names are not animation *kind* names:
+the exe embeds a `#enum` and a table at file offset `0x3F0CC6` / `0x3F0D76`
+(VA `0x7F0CC6` / `0x7F0D76`)
 
 ```
 #enum MAN_ANI_STAND,MAN_ANI_JUMPING,MAN_ANI_RUN,MAN_ANI_JUMPSTART,MAN_ANI_JUMPDOWN,MOVE_ANI_SLIDEEND,MOVE_ANI_SWIM
@@ -1258,9 +1299,44 @@ which names `01stand` and `03run` — **not** `stand01`/`run` — and maps each 
 to a *playback speed*, not a file. The four filenames that do appear
 (`jumping`, `jumpdown`, `jumpstart`; `stand01` does not) are in a quoted block
 (`/* … */`) of a superseded style, so this table does **not** establish the
-model→clip binding. That binding remains open; `stand01` matching
-`SetAniKind("stand01")` is still the only evidence, and it is name-literal, not
-structural.
+model→clip binding.
+
+**But `ziptabedit` does, and it is more specific than the name match suggests.**
+
+`ziptabedit.gbc` ("动作包定义表编辑", action-pack definition table; netpak payload
+`af3407ec`, 12 rows × 6 cols) is the missing model→clip map. Columns are
+`系统名 / 原始动作包 / 附加动作包 / 查找索引 / 附加动作名 / 替换动作`, and the rows
+partition by `模板|人类男` (template: human male) and `模板|人类女` (human female):
+
+| 系统名 (system) | 附加动作名 (base clips) | 替换动作 (replacement) |
+|---|---|---|
+| `人类_男_动作` | `jumpdown, jumping, jumpstart, walk, death, fly, fly_stand` | `stand01` |
+| `人类_男_动作01` | `ready_quanji, attack_box02, ready_sword, attack_cross02, …` (16) | `quanji` |
+| `人类_男_动作02` | attack/spell effects (`fsxiwang`, `zsxuanfenga`, …) (37) | `quanji` |
+| `人类_男_动作03` | `swimidle, caiji, heyao, hit, knockdown, shiqu, shiyong, stun, swim, wakuang` | `stand01` |
+| `人类_男_动作04` | social emotes (`qingzhu, kuqi, jingya, xingli, feiwen, …`) (26) | `stand01` |
+| `人类_男_动作05` | mounted combat (`zuoqi_attack_…`, `zuoqi_ready_…`) (15) | `zuoqi` |
+
+Three things follow, and they resolve most of the open question:
+
+1. **The four shipped clips are a coherent "base action pack"**, not a random
+   sample. `jumpdown, jumping, jumpstart` appear verbatim in row 1 alongside
+   `walk, death, fly, fly_stand`. `run` is the one exception — it is not in any
+   `附加动作名` list, though `walk` is, and `run.caf` and `stand01.caf` are the
+   two 22,376-byte clips.
+2. **`stand01` is the `替换动作` (replacement / fallback) clip**, the idle every
+   system falls back to. That is exactly why it is the clip shipped and why
+   `SetAniKind("stand01")` is the overwhelmingly common call site.
+3. So "405 other clips absent" understates it: **one action pack out of six
+   per gender, and only one of the two genders, is present at all.** The 12
+   rows reference **111 distinct** `附加动作名` clip names between them, so the
+   manifest's 406 zips are roughly 3–4 files per name (LOD or variant sets).
+
+The remaining gap is now narrow and specific: the link from a **`系统名`
+(system) to a character's model GUID** is not in this table — `查找索引` holds
+only `模板|人类男` / `模板|人类女`, a template wildcard rather than a model id.
+That lookup must live in whichever table assigns a model to an NPC/player, so
+the next step is `npctabedit` / `peteditlist`, not more animation work.
 
 `tools/caf_decode.py` → `extracted/models/caf/*.json` (one per clip: header,
 `rig`, and per-track `bone` / `n_keys` / `keys`, each key being

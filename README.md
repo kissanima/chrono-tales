@@ -26,6 +26,7 @@ specification and findings log. This README is only an index.
 | `.53wf` mesh geometry | solved |
 | `.cmz` skeleton + bind pose | solved |
 | `.cmz` `sbus` skinned geometry + index buffer | solved |
+| `.caf` character animation (Cal3D `CalCoreAnimation`, 5 clips) | solved (byte-exact); model → clip binding still open |
 | `SysFileVer.var` asset registry (9,975 records) | solved |
 | Packer manifest (`0xBE119407`-free `.var`, seed 100) | solved — holds the pack's intended file list |
 | Texture path convention (`model/<GUID>.fw3`, `tex/<GUID>.<ext>`) | solved |
@@ -105,6 +106,14 @@ python tools/sbus_obj.py                 # .cmz skin -> OBJ (with UVs)
 python tools/sbus_validate.py --strict   # regression test (exit 1 on failure)
 python tools/obj_render.py --obj extracted/models/skin_obj \
                            --sheet out.png --up z --size 320 --cols 3
+
+# animation
+python tools/caf_decode.py               # .caf clips -> extracted/models/caf/*.json
+python tools/caf_decode.py check         # assert byte-exact, all 5 clips
+python tools/caf_validate.py --strict    # rig/structural regression test
+
+# everything at once
+python tools/check_all.py                # 14 invariants, exit 1 on any failure
 ```
 
 All paths are relative to the repo root.
