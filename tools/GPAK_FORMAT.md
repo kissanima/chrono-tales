@@ -1191,31 +1191,45 @@ bones, which is f32 round-off. That is a decisive, zero-parameter match — a
 wrong quaternion order or a missing conjugation cannot land on an independently
 derived pose.
 
-**Which skeleton these drive.** All five clips bind to **`2682c5d5`**, the
-43-bone rig, whose bind height is **1.565 m** (world Z spans 0.207 .. 1.772).
+**Which skeleton these drive.** All five clips bind to the 43-bone Biped rig
+(now filed as **`b056501a.cmz`**; see the filename trap below), whose bind
+height is **1.565 m** (world Z spans 0.207 .. 1.772).
 Scoring every decoded `.cmz` by "how many bones' key 0 equals the bind pose"
-gives **35–43 / 43** for `2682c5d5` and **0 / 43** for all eight 109- and
+gives **35–43 / 43** for that rig and **0 / 43** for all eight 109- and
 119-bone rigs — no partial credit anywhere. `jumpstart.caf` is exact on all 43
 bones, which is what pins the mapping.
 
-**What that rig is — and what is still unclear.** Its bone names are a
-standard 3ds Max **Biped** humanoid: `Bip01`, `Bip01 Pelvis`,
+**What that rig is — solved, and it settles a stale-name confusion.** The
+skeleton is a standard 3ds Max **Biped** humanoid: `Bip01`, `Bip01 Pelvis`,
 `Spine`/`Spine1`, `Neck`, `Head`, `HeadNub`, `L/R Clavicle` → `UpperArm` →
 `Forearm` → `Hand` → `Finger0`, `L/R Thigh` → `Calf` → `Foot` → `Toe0`, and
 `Footsteps`. So the skeleton is a humanoid character, not a vehicle.
 
-But the *same* file also carries five `sbus` mesh parts and a `MAP1` name of
-`机甲摩托_轮子` ("mech motorcycle **wheel**"), and 13 of its 43 bones are not
-Biped bones at all: `t`, `tf`, `Bip01 F Lun`, `Bip01 B Lun`, `tb`,
-`Bip01 An`, `q`, `Bip01 penqi01`–`04` (`penqi` = 喷气, "jet"), `s`, `w`. Note
-that §4.6's list of five mech part names (front wheel / rear wheel / body /
-front / mudguard) does not match what `cmz.py` reports for this file's `MESH`
-chunk today (five parts named `s`, `MAP1` = wheel), so the two readings of this
-rig are not yet reconciled. **The honest statement is: humanoid Biped skeleton
-plus wheel/jet attachment bones, with mech wheel geometry attached.** Whether
-that is a rider-on-mech rig, a reused Biped, or a partially-named export is
-**open**, and the bone names are stronger evidence than the part labels — but
-they do not by themselves explain the part labels either.
+The *same* file also carries five `sbus` parts named `机甲摩托_前轮 / 后轮 /
+车身 / 车头 / 轮眉架子` (mech motorcycle front wheel / rear wheel / body /
+front / mudguard), and 13 of the 43 bones are not Biped bones: `t`, `tf`,
+`Bip01 F Lun`, `Bip01 B Lun`, `tb`, `Bip01 An`, `q`, `Bip01 penqi01`–`04`
+(`penqi` = 喷气, "jet"), `s`, `w`. So one `.cmz` holds a **Biped skeleton plus
+mech wheel/jet attachment bones and mech wheel geometry** — a rider-on-mech
+rig, exported as a single skeleton.
+
+**A filename trap worth recording, because it cost time here.** `cmz.py`'s
+output JSONs were produced *before* `apply_names.py` renamed the extracted
+files, so `extracted/models/cmz/2682c5d5.json` still says
+`"path": "extracted\\netpak\\unknown\\2682c5d5.cmz"` — but that file no longer
+exists. The rig now on disk is `extracted/netpak/model/b056501a.cmz`
+(103,511 bytes, byte-identical skeleton to that JSON). So:
+
+- the rig the five clips bind to is identified by **content**, and its
+  current on-disk name is **`b056501a`**;
+- `2682c5d5` is the *pre-rename* hash, and is what the JSON stem still says;
+- §4.6's part names are correct — re-deriving them with
+  `sbus_decode.part_name()` on `b056501a.cmz` returns exactly the five
+  `机甲摩托_*` names. The `s` names in `cmz.py`'s JSON `mesh` array are an
+  artefact of its own (weaker) name heuristic, not a contradiction.
+
+This is the §4.7 lesson recurring: a tool keyed on a path that renaming can
+change resolves to the wrong thing or to nothing.
 
 The clips are deliberately leaner than the humanoid rigs: 31 of the 43 bone
 names also exist in the 119-bone humanoid, but only 8 of those share an index,
@@ -1339,9 +1353,11 @@ That lookup must live in whichever table assigns a model to an NPC/player, so
 the next step is `npctabedit` / `peteditlist`, not more animation work.
 
 `tools/caf_decode.py` → `extracted/models/caf/*.json` (one per clip: header,
-`rig`, and per-track `bone` / `n_keys` / `keys`, each key being
+`rig`, `rig_file`, and per-track `bone` / `n_keys` / `keys`, each key being
 `[time, tx, ty, tz, qx, qy, qz, qw]` with translations still in centimetres as
-stored). `tools/caf_decode.py check` is the byte-exact assertion;
+stored). `rig` is the `.cmz` JSON stem and `rig_file` is the name that skeleton
+currently has on disk (`b056501a` here, not `2682c5d5` — the stem is stale, see
+above). `tools/caf_decode.py check` is the byte-exact assertion;
 `tools/caf_validate.py --strict` is the regression test.
 
 ---

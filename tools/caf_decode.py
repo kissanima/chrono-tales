@@ -149,7 +149,15 @@ def decode(data, name="<mem>"):
 
 # --------------------------------------------------------------- rig binding
 def load_rigs(root="extracted/models/cmz"):
-    """{stem: bones} for every decoded .cmz skeleton."""
+    """{stem: bones} for every decoded .cmz skeleton.
+
+    The stem is whatever `cmz.py` last wrote, which may predate an
+    `apply_names.py` rename: `2682c5d5.json` still records
+    `extracted/netpak/unknown/2682c5d5.cmz`, but the same rig now lives at
+    `extracted/netpak/model/b056501a.cmz`.  So the *stem* is only a label here
+    - the binding decision is made on bone geometry, never on the name.  See
+    `rig_aliases()` for the recovered stem -> current-filename mapping.
+    """
     out = {}
     for p in sorted(pathlib.Path(root).glob("*.json")):
         try:
@@ -159,6 +167,57 @@ def load_rigs(root="extracted/models/cmz"):
         if isinstance(d, dict) and d.get("bones"):
             out[p.stem] = d["bones"]
     return out
+
+
+def rig_aliases(root="extracted/models/cmz", cmz_dir="extracted/netpak/model"):
+    """{json stem: current on-disk .cmz name} for rigs whose stem is stale.
+
+    Matches on skeleton content (bone names + parents), because that is the
+    only identity that survives a rename.  Returns **only unambiguous** stems:
+    the seven 119-bone rigs share one identical skeleton and differ only in
+    their skinned parts, so content cannot tell them apart and they are
+    deliberately omitted rather than guessed.
+    """
+    stems = {}
+    for p in sorted(pathlib.Path(root).glob("*.json")):
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not (isinstance(d, dict) and d.get("bones")):
+            continue
+        if pathlib.Path(d.get("path", "")).exists():
+            continue                      # JSON is still current
+        stems[p.stem] = [(b["name"], b["parent"]) for b in d["bones"]]
+    if not stems:
+        return {}
+    on_disk = {}
+    for p in sorted(pathlib.Path(cmz_dir).glob("*.cmz")):
+        try:
+            rig = cmz_bones(p)
+        except Exception:
+            continue
+        if rig:
+            on_disk[p.stem] = [(b["name"], b["parent"]) for b in rig]
+    out = {}
+    for stem, want in stems.items():
+        hits = [name for name, key in on_disk.items() if key == want]
+        if len(hits) == 1:
+            out[stem] = hits[0]
+    return out
+
+
+def cmz_bones(path):
+    """Bones of a .cmz, via the repo's own parser (`tools/cmz.py`)."""
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    from cmz import parse_skel                     # noqa: E402
+    from sbus_decode import chunk_bounds           # noqa: E402
+    d = pathlib.Path(path).read_bytes()
+    sk = next((b for b in chunk_bounds(d) if b[1] == "skel"), None)
+    if not sk:
+        return None
+    bones, _ = parse_skel(d, sk[0] + 4)
+    return bones
 
 
 def rig_score(anim, bones):
@@ -254,10 +313,13 @@ def check(zip_path=CAF_ZIP, root=None, verbose=True):
 
 
 # -------------------------------------------------------------------- export
-def to_json(anim, rig_stem=None):
+def to_json(anim, rig_stem=None, aliases=None):
     return dict(name=anim["name"], size=anim["size"], version=anim["version"],
                 duration=anim["duration"], n_tracks=anim["n_tracks"],
                 rig=rig_stem,
+                # the .cmz stem in extracted/models/cmz may predate a rename;
+                # `rig_file` is the name the skeleton actually has on disk now
+                rig_file=(aliases or {}).get(rig_stem, rig_stem),
                 tracks=[dict(bone=t["bone"], n_keys=t["n_keys"],
                              keys=[list(k) for k in t["keys"]])
                         for t in anim["tracks"]])
@@ -281,6 +343,7 @@ def main():
         return 0
 
     rigs = load_rigs()
+    aliases = rig_aliases()
     out = pathlib.Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     print(f'\n{"clip":14} {"duration":>9} {"tracks":>6} {"keys":>5} {"step":>8}  rig')
@@ -288,13 +351,14 @@ def main():
         anim = decode(data, name)
         rig, hit, n = resolve_rig(anim, rigs)
         step = anim["tracks"][0]["keys"][1][0] - anim["tracks"][0]["keys"][0][0]
+        now = f' (now {aliases[rig]}.cmz)' if rig in aliases else ""
         print(f'{name.replace(".caf", ""):14} {anim["duration"]:9.6f} '
               f'{anim["n_tracks"]:6} '
               f'{sum(t["n_keys"] for t in anim["tracks"]):5} {step:8.5f}  '
-              f'{rig} (key0 == bind pose on {hit}/{n} bones)')
+              f'{rig} (key0 == bind pose on {hit}/{n} bones){now}')
         stem = pathlib.Path(name).stem
         (out / (stem + ".json")).write_text(
-            json.dumps(to_json(anim, rig), indent=1), encoding="utf-8")
+            json.dumps(to_json(anim, rig, aliases), indent=1), encoding="utf-8")
     print(f'\nwrote {len(list(out.glob("*.json")))} JSON to {out}')
     return 0 if ok else 1
 
