@@ -159,6 +159,17 @@ CHECKS = [
               "must not inflate the payload count. 'map imgs' walks every image "
               "the Maps view references (relief/layer by archive hash, the 3D "
               "renders by tile stem) and fails on a dangling path"),
+    Check("web-export", ["tools/export_web.py", "--check"],
+          r"web export ok: .*100% of \d[\d,]* terrain triangles face up",
+          forbid=r"FAIL",
+          why="the three.js client fails SILENTLY -- a blank canvas with no "
+              "visible error. All four bugs found in it were structural: a glTF "
+              "buffer with no uri (the loader then wants a GLB chunk), inverted "
+              "terrain winding (0% of 196,608 triangles faced up, so backface "
+              "culling hid the ground), a missing vendored "
+              "utils/BufferGeometryUtils.js (the module graph dies before "
+              "main.js runs), and no <script src=height.js> (window.HEIGHT "
+              "undefined -> throws on the first frame)"),
 ]
 
 # checks that only make sense once the caf track has landed

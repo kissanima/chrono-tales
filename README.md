@@ -130,8 +130,12 @@ python tools/render_scene3d.py --world                # stitch all six tiles
 python tools/render_scene3d.py --check                # 4 invariants, exit 1
 python tools/render_scenes.py            # flat top-down map of every scene
 
+# web client (three.js): export the world + actor, then verify the export
+python tools/export_web.py               # -> extracted/web/ (glTF + height.js + client)
+python tools/export_web.py --check       # 4 invariants, exit 1 (silent-failure guard)
+
 # everything at once
-python tools/check_all.py                # 18 invariants, exit 1 on any failure
+python tools/check_all.py                # 21 invariants, exit 1 on any failure
 ```
 
 All paths are relative to the repo root.
@@ -168,6 +172,38 @@ Rebuild it after any re-export:
 
 ```bash
 python tools/varbin_tables.py && python tools/build_explorer.py
+```
+
+## The web client
+
+`extracted/web/` is a separate, interactive view: the stitched world and the
+actor as glTF 2.0, driven by a three.js third-person client (WASD, jump, click
+to walk, drag to orbit). `export_web.py` writes it; `height.js` is the world
+height sampler the client uses to keep the player on the ground.
+
+**It needs a server, unlike the explorer.** `GLTFLoader` uses `fetch`, which
+`file://` blocks, so serve the directory:
+
+```bash
+python -m http.server 8731 --directory extracted/web   # then open 127.0.0.1:8731
+```
+
+three.js is vendored by hand in `vendor/` and is not produced by any script, so
+a fresh `extracted/` needs `vendor/three.module.js`, `vendor/GLTFLoader.js` and
+`utils/BufferGeometryUtils.js` (r160; the loader imports the latter by a
+relative path, so it must sit at `web/utils/`). `export_web.py --check` reports
+any that are missing.
+
+That client fails *silently* — a blank canvas with no visible error — so every
+structural property it needs is pinned by `--check`: buffers must carry a
+`uri`, 100% of the terrain triangles must face up, `height.js` must be
+referenced, and the three vendored modules must exist. To capture a frame
+headlessly (the plain `--screenshot` flag fires before an async glTF load
+finishes, giving a blank canvas):
+
+```bash
+python tools/cdp_shot.py "http://127.0.0.1:8731/index.html" out.png \
+    --ready "document.getElementById('stat').textContent==='loaded'"
 ```
 
 Every figure on the page is read from the generated data (manifests, `_index`

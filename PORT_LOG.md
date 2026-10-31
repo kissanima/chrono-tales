@@ -4,6 +4,39 @@ Handoff log. Newest entry on top. Keep each entry under 20 lines.
 
 ---
 
+## 2026-10-31 (16) — edit → re-export → browser loop PROVEN; 4 client bugs fixed
+
+**Status:** DONE
+
+**What was done:** Closed the loop with the parallel agent's web client.
+* Loop: `zmap_write.py edit` a terrain dome → `export_web.py` → the browser's own
+  `height.js` sampler at the spawn moved 47.444 → 59.652 m (**+12.208**, exactly
+  the 800 h16 requested) and the glTF vertex at (128,·,-128) is 59.652. Before/
+  after frames from one fixed camera: `work/loop_{before,after}_big.png` (61 m
+  dome, 3.5% of frame differs, 19,446 px strongly). Tiles restored + verified.
+* **The client had never rendered a frame.** Four silent bugs, all fixed in
+  `export_web.py`: (1) no `<script src=height.js>` → `window.HEIGHT` undefined,
+  throws at main.js:27; (2) buffers had **no `uri`** → glTF says "GLB chunk",
+  loader dies on `reading 'body'`; (3) `utils/BufferGeometryUtils.js` never
+  vendored → module graph dead, no canvas at all; (4) **terrain winding inverted
+  — 0.0% of 196,608 triangles faced up**, so backface culling hid the ground and
+  every tree showed its underside. Also fixed the normal's Z sign (frame map
+  sends `-dh/dy` to `+dh/dy`).
+* New `export_web.py --check` (4 invariants) wired into check_all → **21/21**,
+  proven to fail by re-injecting the old index order.
+* New `tools/cdp_shot.py`: drives Edge over CDP (stdlib WebSocket) and waits for
+  a JS condition before capturing. `--screenshot` alone fires before an async
+  glTF load and yields a blank canvas — do not trust it.
+
+**Next Steps:** actor exports as a 137-vertex, 0.4 m sliver (should be 2,279
+verts / 1.75 m), and props render at the wrong scale, so the third-person camera
+spawns inside geometry. That is the parallel agent's remaining work, not decode.
+
+**Blockers:** None. Suite 21/21. three.js in `vendor/` is hand-placed, not
+regenerated — a wiped `extracted/` needs r160 re-fetched.
+
+---
+
 ## 2026-10-31 (15) — write path exists: varbin encoder + .zmap writer
 
 **Status:** DONE

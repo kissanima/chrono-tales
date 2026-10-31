@@ -37,6 +37,7 @@ Usage
 """
 import argparse
 import io
+import math
 import pathlib
 import struct
 import sys
@@ -246,14 +247,35 @@ def cmd_edit(args):
     h = decode_height(doc[IDX_HEIGHT])
     x, y, units = (int(t) for t in args.raise_cell.split(","))
     grid = list(h["grid"])
-    i = y * HEIGHT_N + x
-    old = grid[i]
-    grid[i] = max(0, min(0xFFFF, old + units))
+    m_per_unit = (h["maxz"] - h["minz"]) / 65530.0
+    r = max(0, args.radius)
+    touched = 0
+    peak = 0
+    for cy in range(y - r, y + r + 1):
+        for cx in range(x - r, x + r + 1):
+            if not (0 <= cx < HEIGHT_N and 0 <= cy < HEIGHT_N):
+                continue
+            d = math.hypot(cx - x, cy - y)
+            if d > r:
+                continue
+            # cosine falloff: full at the centre, zero at the rim, so the edit
+            # is a smooth hill rather than a one-cell spike
+            f = 1.0 if r == 0 else 0.5 * (1.0 + math.cos(math.pi * d / r))
+            du = int(round(units * f))
+            if du == 0 and d > 0:
+                continue
+            i = cy * HEIGHT_N + cx
+            before = grid[i]
+            grid[i] = max(0, min(0xFFFF, before + du))
+            if grid[i] != before:
+                touched += 1
+                peak = max(peak, abs(grid[i] - before))
     doc[IDX_HEIGHT] = encode_height(grid, h["minz"], h["maxz"])
     payload2, _ = write_map(args.input, args.output, doc, template=zi)
     print(f"{args.input} -> {args.output}")
-    print(f"  cell ({x},{y}) {old} -> {grid[i]} "
-          f"({(grid[i] - old) * (h['maxz'] - h['minz']) / 65530:+.2f} m)")
+    print(f"  centre ({x},{y}) +{units} h16, radius {r} cells "
+          f"({r * 2} m): {touched} cells changed, peak {peak} h16 "
+          f"= {peak * m_per_unit:.2f} m")
     return 0
 
 
@@ -268,6 +290,8 @@ def main(argv=None):
     e.add_argument("input")
     e.add_argument("output")
     e.add_argument("--raise-cell", required=True, metavar="X,Y,UNITS")
+    e.add_argument("--radius", type=int, default=0,
+                   help="cells of cosine falloff around the centre (default 0)")
     a = ap.parse_args(argv)
     if a.cmd == "check":
         return cmd_check(a.root)

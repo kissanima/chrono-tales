@@ -34,6 +34,7 @@ import base64
 import json
 import math
 import pathlib
+import re
 import shutil
 import struct
 import sys
@@ -189,7 +190,11 @@ class Gltf:
         return len(self.g["nodes"]) - 1
 
     def write(self, path):
-        self.g["buffers"] = [{"byteLength": len(self.bin)}]
+        # The buffer MUST carry a uri: with none, glTF 2.0 says the data lives
+        # in the GLB BINARY chunk, and GLTFLoader then dereferences a binary
+        # extension that a .gltf file does not have ("reading 'body'").
+        bin_name = path.name.replace(".gltf", ".bin")
+        self.g["buffers"] = [{"byteLength": len(self.bin), "uri": bin_name}]
         path.write_text(json.dumps(self.g, indent=1), encoding="utf-8")
         pathlib.Path(str(path).replace(".gltf", ".bin")).write_bytes(
             bytes(self.bin))
@@ -226,19 +231,24 @@ def terrain_prim(g, hf, ox, oy, atlas, step=2.0):
     wy = ys * step + oy
     wz = hf
     pos = np.stack([wx, wz, -wy], axis=-1).reshape(-1, 3)      # glTF frame
-    # normals from the height gradient (world frame, then mapped)
+    # normals from the height gradient.  The world normal is
+    # (-dh/dx, -dh/dy, 1); the frame map (x,y,z)->(x,z,-y) sends that to
+    # (-dh/dx, 1, +dh/dy) -- the Z term flips sign, it is not symmetric.
     dzdx = np.zeros_like(wz)
     dzdy = np.zeros_like(wz)
     dzdx[:, 1:-1] = (wz[:, 2:] - wz[:, :-2]) / (2 * step)
     dzdy[1:-1, :] = (wz[2:, :] - wz[:-2, :]) / (2 * step)
-    n = np.stack([-dzdx, np.ones_like(wz), -dzdy], axis=-1)
+    n = np.stack([-dzdx, np.ones_like(wz), dzdy], axis=-1)
     n /= np.linalg.norm(n, axis=-1, keepdims=True)
     nrm = n.reshape(-1, 3)
     # uv covers this tile's own atlas
     u = xs / (cols - 1)
     v = 1.0 - ys / (rows - 1)
     uvs = np.stack([u, v], axis=-1).reshape(-1, 2)
-    # two triangles per quad; skip degenerate (flat) quads far outside
+    # two triangles per quad, counter-clockwise seen from above.  With the
+    # order (a,d,b) every one of the 196,608 terrain triangles faced DOWN, so
+    # backface culling hid the ground entirely and every tree showed its
+    # underside.  Verify with: winding up-share must be ~100%, not 0%.
     idx = []
     for r in range(rows - 1):
         for c in range(cols - 1):
@@ -246,7 +256,7 @@ def terrain_prim(g, hf, ox, oy, atlas, step=2.0):
             b = a + 1
             d = a + cols
             e = d + 1
-            idx += [a, d, b, b, d, e]
+            idx += [a, b, d, b, e, d]
     mi = g.material(atlas, double=False)
     return prim(g, pos.tolist(), nrm.tolist(), uvs.tolist(), idx, mi)
 
@@ -551,6 +561,7 @@ HTML = """<!DOCTYPE html>
  WASD / arrows move · Space jump · click ground to walk · drag to orbit · wheel zoom<br>
  <span id="stat"></span></div>
 <script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
+<script src="./height.js"></script>
 <script type="module" src="./main.js"></script></body></html>
 """
 
@@ -730,7 +741,88 @@ addEventListener('resize', () => {
 """
 
 
+def check_export(out=None):
+    """Validate an existing export without rebuilding it.
+
+    Each assertion is one of the bugs that produced a *silent* blank page:
+    a buffer with no uri (glTF says "GLB chunk", which a .gltf does not have),
+    inverted terrain winding (backface culling hides the ground), a missing
+    vendored module (the module graph dies before main.js runs), and a missing
+    height.js reference (window.HEIGHT undefined on the first frame).
+    """
+    out = pathlib.Path(out or OUT)
+    fails = []
+
+    for name in ("scene.gltf", "actor.gltf"):
+        p = out / name
+        if not p.exists():
+            fails.append(f"{name} missing")
+            continue
+        g = json.loads(p.read_text(encoding="utf-8"))
+        for b in g.get("buffers", []):
+            if not b.get("uri"):
+                fails.append(f"{name}: buffer has no uri (loader expects a GLB chunk)")
+            elif not (out / b["uri"]).exists():
+                fails.append(f"{name}: buffer uri {b['uri']} does not exist")
+
+    # terrain winding: every triangle must face up
+    g = json.loads((out / "scene.gltf").read_text(encoding="utf-8"))
+    bin_ = (out / "scene.bin").read_bytes()
+
+    def read(ai):
+        a = g["accessors"][ai]
+        bv = g["bufferViews"][a["bufferView"]]
+        off = bv.get("byteOffset", 0) + a.get("byteOffset", 0)
+        ncomp = {"SCALAR": 1, "VEC2": 2, "VEC3": 3}[a["type"]]
+        fmt = {5126: "f", 5125: "I", 5123: "H", 5121: "B"}[a["componentType"]]
+        return struct.unpack_from("<%d%s" % (a["count"] * ncomp, fmt), bin_, off)
+
+    up = down = 0
+    for node in [n for n in g["nodes"] if (n.get("name") or "").startswith("intro")]:
+        prim = g["meshes"][node["mesh"]]["primitives"][0]
+        pos = read(prim["attributes"]["POSITION"])
+        idx = read(prim["indices"])
+        for t in range(0, len(idx) - 2, 3):
+            a, b, c = idx[t]*3, idx[t+1]*3, idx[t+2]*3
+            ux, uy, uz = pos[b]-pos[a], pos[b+1]-pos[a+1], pos[b+2]-pos[a+2]
+            vx, vy, vz = pos[c]-pos[a], pos[c+1]-pos[a+1], pos[c+2]-pos[a+2]
+            if uz*vx - ux*vz > 0:
+                up += 1
+            else:
+                down += 1
+    share = up / max(1, up + down)
+    if share < 0.99:
+        fails.append(f"terrain winding: only {100*share:.1f}% of "
+                     f"{up+down:,} triangles face up (backface culling will "
+                     f"hide the ground)")
+
+    html = (out / "index.html").read_text(encoding="utf-8")
+    if 'src="./height.js"' not in html:
+        fails.append("index.html does not load height.js (window.HEIGHT "
+                     "undefined -> main.js throws on the first frame)")
+    for mod in ("vendor/three.module.js", "vendor/GLTFLoader.js",
+                "utils/BufferGeometryUtils.js"):
+        if not (out / mod).exists():
+            fails.append(f"missing vendored module {mod}")
+
+    hj = (out / "height.js").read_text(encoding="utf-8")
+    m = re.search(r"cols:(\d+),rows:(\d+)", hj)
+    if not m:
+        fails.append("height.js has no cols/rows")
+
+    if fails:
+        for f in fails:
+            print(f"FAIL {f}")
+        return 1
+    print(f"web export ok: buffers linked, {100*share:.0f}% of {up+down:,} "
+          f"terrain triangles face up, height.js {m.group(1)}x{m.group(2)}, "
+          f"3 vendor modules, height.js referenced")
+    return 0
+
+
 def main():
+    if "--check" in sys.argv:
+        return check_export()
     OUT.mkdir(parents=True, exist_ok=True)
     # ---------------- world ----------------
     gw = Gltf("scene")
@@ -754,6 +846,21 @@ def main():
     (OUT / "main.js").write_text(JS, encoding="utf-8")
     print(f"  index.html + main.js")
 
+    # three.js is vendored by hand, not by this script, and a missing file in
+    # the module graph fails *silently*: the page renders a black canvas with
+    # no error the user can see.  GLTFLoader pulls in
+    # ../utils/BufferGeometryUtils.js relative to its own location, so it has
+    # to sit at web/utils/, not next to the loader.
+    need = ["vendor/three.module.js", "vendor/GLTFLoader.js",
+            "utils/BufferGeometryUtils.js"]
+    missing = [p for p in need if not (OUT / p).exists()]
+    if missing:
+        print(f"  WARNING: missing vendored module(s): {', '.join(missing)}")
+        print("           the page will load but render nothing -- fetch the")
+        print("           matching three.js release into extracted/web/")
+    else:
+        print(f"  vendor: {len(need)} modules present")
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
