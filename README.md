@@ -17,10 +17,14 @@
 
 ## What this is
 
-**Chrono Tales** (时光之刃 / 时之刃) was a free-to-play 3D MMORPG released in **2012**,
-built on an in-house engine called **GBox2**. It ran as a native Windows D3D9 client,
-shipped as two `.gpak` archives plus a launcher, and is no longer playable — the
+**Chrono Tales** was a free-to-play 3D MMORPG released in **2012**, built on an
+in-house engine called **GBox2**. It ran as a native Windows D3D9 client, shipped
+as two `.gpak` archives plus a browser launcher, and is no longer playable — the
 servers are gone and the client is abandonware.
+
+The client these tools were written against is the final build, dated
+**2013-08-28**, with archives last written **2013-09-26**. Everything here is
+derived from that build.
 
 This repository has two halves, and they feed each other:
 
