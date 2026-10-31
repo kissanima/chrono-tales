@@ -1877,6 +1877,38 @@ the shared material for `前轮`/`后轮`. All five parts bind, 2,932/2,932 face
 textured, UVs are per-vertex and already in `0..1`. `render_anim.py --check` is
 the fast invariant (5/5 textures, UV range, no out-of-range face index).
 
+#### The action pack is a *vehicle* rig, not the human body
+
+The only animation data found in `netpak` is `action/e41c7990.zip`, which holds
+exactly five clips: `stand01`, `run`, `jumpstart`, `jumping`, `jumpdown`. All
+five bind to rig **`2682c5d5`**, and that rig is **not** the 119-bone human
+skeleton:
+
+| rig | bones | shared names with the body rig | bind pose agrees |
+|---|---|---|---|
+| `5995da06`, `5e493068`, `72b5ee25`, `a7b5710e`, `d1500c0c`, `f2d259a2`, `ff725ba4` | 119 | 119 | 119/119 |
+| `482f1708` (hair) | 109 | 109 | 90/109 |
+| `2682c5d5` (clips) | 43 | 31 | **0/31** |
+
+`2682c5d5`'s bone names include `Bip01 penqi01..04` ("jets") and
+`Bip01 F Lun` / `Bip01 B Lun` ("front/rear wheel"), and 12 of its names do not
+exist in the body rig at all — it is the mecha-motorcycle skeleton whose parts
+`_skin.json` lists under the same key. For the 31 names the two rigs *share*,
+the bind pose disagrees on every single one, by up to 90° of rotation and 96 cm
+of offset. Same name therefore does **not** mean same bone; compare the bind
+rotation (quaternion angle) and the local offset before trusting a name match
+(`rig_bone_matches()` in `export_web.py`).
+
+Driving the body with those rotations — which is what "match tracks to body
+bones by name" does — deformed the actor into a 3.5 m tangle. It rendered as a
+wall of body texture covering the frame, which is indistinguishable at a glance
+from a camera-inside-geometry bug, and every CPU-side bounds check still
+reported a correct 1.9 m figure because `getVertexPosition()` only ever reads
+`POSITION`. The exporter now verifies compatibility and, when the clip rig is
+foreign, exports the actor in bind pose and records the reason in
+`asset.extras.animations_skipped`. **Human clips are still missing** — they
+would have to come from an action pack that has not been located.
+
 ### 4.10 Particle effects — `netpak/effect/*.txt`
 
 The engine's effect format is **plain GBK text**, not a binary container, and it

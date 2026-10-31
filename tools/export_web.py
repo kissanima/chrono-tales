@@ -416,6 +416,19 @@ def part_tex(reg, part_name):
     return None
 
 
+def rig_bone_matches(a, b, rot_deg=1.0, offset_cm=0.5):
+    """Do two rigs' bones with the same name describe the same bind pose?
+
+    Same-name is not the same skeleton: a vehicle rig can reuse the human bone
+    names for its own hierarchy.  Compare the bind rotation (quaternion angle)
+    and the local offset (cm) instead of trusting the name.
+    """
+    d = min(1.0, abs(sum(x * y for x, y in zip(a["rot"], b["rot"]))))
+    ang = math.degrees(2 * math.acos(d))
+    off = max(abs(a["offset"][k] - b["offset"][k]) for k in range(3))
+    return ang < rot_deg and off < offset_cm
+
+
 def export_actor(g):
     import varfile
     reg = {}
@@ -460,11 +473,19 @@ def export_actor(g):
     # -- skinned mesh: one primitive per part (each part binds one texture).
     # Every wearable piece is its own .cmz with its own copy of the 119-bone
     # rig, so the parts are spread across the skin atlas's rig keys.
+    #
+    # A vertex's joint index is an index into ITS OWN rig's bone list, and not
+    # every rig has 119 bones -- the hair rig 482f1708 has 109.  Using those
+    # indices as body-joint indices binds hair to whatever bone happens to sit
+    # at that slot.  Remap through the bone NAME instead, which is the only
+    # identifier the rigs actually share.
     skin = json.loads((ROOT / "extracted/models/skin/_skin.json")
                       .read_text(encoding="utf-8"))
     want = set(BODY_PARTS) | {HAIR_PART}
+    body_index = {b["name"]: b["index"] for b in bones}
     primlist, nverts, ntris, nparts = [], 0, 0, 0
     for key, rig in skin.items():
+        jmap = None
         for part in rig["parts"]:
             if part["name"] not in want:
                 continue
@@ -472,14 +493,33 @@ def export_actor(g):
             if tex is None:
                 print(f"  ! no texture for {part['name']}")
                 continue
-            base = nverts
+            if jmap is None:
+                rp = ROOT / "extracted/models/cmz" / f"{key}.json"
+                if rp.exists():
+                    rbones = json.loads(rp.read_text(encoding="utf-8"))["bones"]
+                    jmap = [body_index.get(b["name"], -1) for b in rbones]
+                else:
+                    jmap = list(range(nb))
             pv = [vmap(v["pos"]) for v in part["verts"]]
             pu = [(v.get("uv") or (0.0, 0.0)) for v in part["verts"]]
-            pj = [(v["bones"][0], 0, 0, 0) for v in part["verts"]]
+            pj = []
+            for v in part["verts"]:
+                j = v["bones"][0]
+                j = jmap[j] if j < len(jmap) else -1
+                if j < 0:                       # no counterpart: bind to root
+                    j = 0
+                pj.append((j, 0, 0, 0))
             pwts = [(1.0, 0.0, 0.0, 0.0) for _ in part["verts"]]
+            # Indices are LOCAL to this primitive: each part gets its own
+            # POSITION accessor, so a cumulative `base` would index past the
+            # end of the buffer.  The GPU then reads whatever follows (the next
+            # part's vertices, then the UVs and joints) and stretches garbage
+            # triangles across the whole screen -- the actor rendered as a wall
+            # of body texture while every CPU-side bounds check said 1.9 m,
+            # because getVertexPosition() never touches the index buffer.
             pidx = []
             for f in part["faces"]:
-                pidx.extend((f[0] + base, f[1] + base, f[2] + base))
+                pidx.extend((f[0], f[1], f[2]))
             pmi = g.material(tex, alpha=("MASK" if tex.suffix.lower() == ".png"
                                          else None))
             primlist.append(prim(g, pv, None, pu, pidx, pmi,
@@ -492,8 +532,33 @@ def export_actor(g):
     g.g["scenes"][0]["nodes"] = [skel_root, mesh_node]
 
     # -- animations: the clip rig's rotations, matched to body bones by name
+    #
+    # A clip may only drive this skeleton if its own rig IS this skeleton.  The
+    # five clips recovered from the action pack (e540.../e41c7990.zip) are bound
+    # to rig 2682c5d5, which has 43 bones and is a *vehicle*: its bone names
+    # include Bip01 penqi01..04 ("jets") and Bip01 F/B Lun ("front/rear wheel"),
+    # and 12 of its bones do not exist in the body rig at all.  For the 31 names
+    # the two rigs share, the bind pose disagrees on every single one -- by up
+    # to 90 deg of rotation and 96 cm of offset.  Applying those rotations by
+    # name to the body skeleton deformed it into a 3.5 m tangle (it rendered as
+    # a wall of body texture filling the screen, which is what looked like a
+    # camera-inside-geometry bug).  So: verify, then animate only if it holds.
     cliprig = json.loads((ROOT / "extracted/models/cmz" / f"{CLIP_RIG}.json")
                          .read_text(encoding="utf-8"))["bones"]
+    bodyrig = {b["name"]: b for b in bones}
+    shared = [b for b in cliprig if b["name"] in bodyrig]
+    agree = sum(1 for b in shared if rig_bone_matches(b, bodyrig[b["name"]]))
+    foreign = (not shared) or agree < 0.95 * len(shared)
+    if foreign:
+        print(f"  ! clip rig {CLIP_RIG} is a different skeleton: "
+              f"{agree}/{len(shared)} shared bones match the body bind pose, "
+              f"{len(cliprig) - len(shared)} names absent from the body rig "
+              f"-> animations skipped, actor exported in bind pose")
+        g.g["asset"]["extras"] = {
+            "animations_skipped": f"clip rig {CLIP_RIG} is not the body rig "
+                                  f"({agree}/{len(shared)} shared bones agree)"}
+        return
+
     bname = {b["name"]: b["index"] for b in bones}
     unmatched = set()
 
@@ -589,10 +654,17 @@ scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x506048, 1.1));
 const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.3, 2200);
 
 // ---- world height sampler (from height.js, generated by export_web.py) ----
+// height.js indexes its grid in GAME coords (x, y).  Every other coordinate in
+// this client is glTF, and the export map is (game x,y,z) -> (x, z, -y), so
+// game y = -glTF z.  Sampling therefore takes glTF (x, z) and negates z once,
+// in here, instead of at each call site.  Two call sites used to pass
+// (game y, game x) -- a transposed field.  That agrees at the symmetric spawn
+// (128, 128) and is up to 39 m wrong elsewhere, so the character walked on the
+// wrong hill and the click-to-walk target landed in the wrong frame entirely.
 const H = window.HEIGHT;                     // {x0,y0,step,cols,rows,data}
-function groundY(x, y){
+function groundAt(x, z){
   const c = Math.min(Math.max((x - H.x0)/H.step, 0), H.cols-1.001);
-  const r = Math.min(Math.max((y - H.y0)/H.step, 0), H.rows-1.001);
+  const r = Math.min(Math.max((-z - H.y0)/H.step, 0), H.rows-1.001);
   const c0 = c|0, r0 = r|0, fc = c-c0, fr = r-r0, d = H.data;
   const i = r0*H.cols+c0;
   return (d[i]*(1-fc)+d[i+1]*fc)*(1-fr) + (d[i+H.cols]*(1-fc)+d[i+H.cols+1]*fc)*fr;
@@ -625,7 +697,12 @@ Promise.all([
     current = 'stand01';
     if (actions[current]) actions[current].setEffectiveWeight(1);
   }
-  player.position.set(128, groundY(128, 128), -128);
+  // Spawn point comes from the exporter, which derives it from the terrain:
+  // see choose_spawn() in tools/export_web.py.  The original start is not in
+  // the map payload, and a hardcoded guess landed on a 57-degree slope.
+  const S = window.SPAWN || {x: 128, z: -128};
+  player.position.set(S.x, groundAt(S.x, S.z), S.z);
+  camPlaced = false;                 // snap the camera instead of flying it in
   stat.textContent = 'loaded';
 });
 
@@ -643,6 +720,31 @@ addEventListener('keydown', e => { keys[e.code] = true; if (e.code==='Space') e.
 addEventListener('keyup',   e => { keys[e.code] = false; });
 
 let camYaw = 0, camPitch = 0.42, camDist = 14, drag = false, lx = 0, ly = 0;
+let camPlaced = false;               // false until the camera has been snapped once
+function camTarget(){
+  const cp = Math.cos(camPitch), sp = Math.sin(camPitch);
+  const hx = player.position.x, hz = player.position.z;
+  const hy = player.position.y + 1.5;                  // the look-at point
+  // Pull the camera IN when the ground is in the way.  The spawn sits on a
+  // hillside whose ground 12.8 m behind the player is 20 m higher than the
+  // orbit wants the eye to be, so a fixed 14 m distance buries the camera
+  // inside the slope and the near plane clips to a solid fill.  Marching the
+  // orbit segment against the analytic height field is exact enough here and
+  // needs no physics.
+  let dist = camDist;
+  for (let t = 0.75; t <= camDist; t += 0.5){
+    const px = hx + Math.sin(camYaw)*cp*t;
+    const pz = hz + Math.cos(camYaw)*cp*t;
+    if (hy + sp*t + 0.7 <= groundAt(px, pz) + 0.4){
+      dist = Math.max(1.6, t - 0.6);
+      break;
+    }
+  }
+  return new THREE.Vector3(
+    hx + Math.sin(camYaw)*cp*dist,
+    hy + sp*dist + 0.7,
+    hz + Math.cos(camYaw)*cp*dist);
+}
 renderer.domElement.addEventListener('mousedown', e => { drag = true; lx = e.clientX; ly = e.clientY; });
 addEventListener('mouseup', () => drag = false);
 addEventListener('mousemove', e => {
@@ -659,15 +761,16 @@ let walkTo = null;
 renderer.domElement.addEventListener('click', e => {
   ndc.set(e.clientX/innerWidth*2-1, -(e.clientY/innerHeight)*2+1);
   ray.setFromCamera(ndc, camera);
-  const h = new THREE.Vector3();
-  // analytic ground plane walk: sample along the ray
-  let t = 0, best = null;
+  // March the ray until it drops below the ground, then keep the hit in glTF
+  // coords.  It used to be stored as {x: game y, y: game x} and then compared
+  // against player.position.x/.z, i.e. two different frames in one comparison,
+  // so a click sent the character somewhere unrelated.
+  let best = null;
   for (let s = 2; s < 900; s += 2){
     const px = camera.position.x + ray.ray.direction.x*s;
     const pz = camera.position.z + ray.ray.direction.z*s;
     const py = camera.position.y + ray.ray.direction.y*s;
-    const g = groundY(-pz, px);       // three (x,z) -> world (y, x)
-    if (py <= g){ best = {x:-pz, y:px}; break; }
+    if (py <= groundAt(px, pz)){ best = {x: px, z: pz}; break; }
   }
   if (best) walkTo = best;
 });
@@ -711,7 +814,7 @@ function animate(){
     }
   }
   if (keys.Space && grounded){ vy = 6.2; grounded = false; jumpPhase = 0; play('jumpstart'); }
-  const gy = groundY(-player.position.z, player.position.x);
+  const gy = groundAt(player.position.x, player.position.z);
   if (!grounded){
     vy -= 16 * dt;
     player.position.y += vy * dt;
@@ -725,14 +828,27 @@ function animate(){
   if (grounded) play(moving ? 'run' : 'stand01');
   if (mixer) mixer.update(dt);
 
-  // third-person camera
-  const cx = player.position.x + Math.sin(camYaw)*Math.cos(camPitch)*camDist;
-  const cz = player.position.z + Math.cos(camYaw)*Math.cos(camPitch)*camDist;
-  const cy = player.position.y + Math.sin(camPitch)*camDist + 2.2;
-  camera.position.lerp(new THREE.Vector3(cx, cy, cz), 1 - Math.pow(0.0015, dt));
+  // third-person camera.  Snap on the first frame: lerping in from the origin
+  // means the opening second of the client is spent inside the terrain, which
+  // is what "the camera spawns inside geometry" looked like.
+  const want = camTarget();
+  const gcam = groundAt(want.x, want.z) + 0.4;         // last-resort floor
+  if (want.y < gcam) want.y = gcam;
+  if (!camPlaced){ camera.position.copy(want); camPlaced = true; }
+  else camera.position.lerp(want, 1 - Math.pow(0.0015, dt));
   camera.lookAt(player.position.x, player.position.y + 1.5, player.position.z);
   renderer.render(scene, camera);
 }
+// Handle for the CDP tooling (tools/cdp_shot.py, tools/cdp_eval.py): a WebGL
+// page fails silently, so the only way to tell "drew nothing" from "drew the
+// wrong thing" is to ask the running client what it thinks.
+window.__ct = {scene, camera, player, groundAt, THREE, renderer, H,
+               ctl: () => ({camYaw, camPitch, camDist, walkTo, current}),
+               anim: () => ({mixer, actions, current}),
+               setCam: (d, p, y) => { if (d != null) camDist = d;
+                                      if (p != null) camPitch = p;
+                                      if (y != null) camYaw = y;
+                                      camPlaced = false; }};
 animate();
 addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
@@ -764,6 +880,28 @@ def check_export(out=None):
                 fails.append(f"{name}: buffer has no uri (loader expects a GLB chunk)")
             elif not (out / b["uri"]).exists():
                 fails.append(f"{name}: buffer uri {b['uri']} does not exist")
+
+        # Every primitive owns its POSITION accessor, so its indices must stay
+        # inside that accessor.  A cumulative vertex offset across primitives
+        # sends the GPU past the end of the buffer: it reads the following
+        # attributes as positions and stretches garbage across the screen.
+        # Nothing on the CPU side notices -- bounds checks and picking all work
+        # off POSITION and never touch the index buffer.
+        bino = (out / b["uri"]).read_bytes() if b.get("uri") else b""
+        for mi, mesh in enumerate(g.get("meshes", [])):
+            for pi, pr in enumerate(mesh["primitives"]):
+                nv = g["accessors"][pr["attributes"]["POSITION"]]["count"]
+                a = g["accessors"][pr["indices"]]
+                bv = g["bufferViews"][a["bufferView"]]
+                off = bv.get("byteOffset", 0) + a.get("byteOffset", 0)
+                fmt = {5125: "I", 5123: "H", 5121: "B"}[a["componentType"]]
+                idx = struct.unpack_from("<%d%s" % (a["count"], fmt), bino, off)
+                if idx and max(idx) >= nv:
+                    fails.append(
+                        f"{name}: {mesh.get('name', mi)} primitive {pi} has "
+                        f"indices up to {max(idx)} but only {nv} vertices -- "
+                        f"{sum(1 for i in idx if i >= nv)} of {len(idx)} are "
+                        f"out of range (garbage geometry on the GPU)")
 
     # terrain winding: every triangle must face up
     g = json.loads((out / "scene.gltf").read_text(encoding="utf-8"))
@@ -810,14 +948,128 @@ def check_export(out=None):
     if not m:
         fails.append("height.js has no cols/rows")
 
+    # --- frame contract -----------------------------------------------------
+    # height.js is indexed in GAME coords (x, y); the client works in glTF,
+    # where game y = -z.  groundAt(x, z) does that one negation inside itself.
+    # A call site passing (game y, game x) instead samples the TRANSPOSED
+    # field, which is identical at the symmetric spawn (128, 128) and up to
+    # 39 m wrong elsewhere -- the character then walks on the wrong hill.
+    # Pin both halves of that: the client must not reintroduce a game-space
+    # sampler, and the grid must be asymmetric enough for the bug to show.
+    js = (out / "main.js").read_text(encoding="utf-8")
+    if "function groundAt(x, z)" not in js:
+        fails.append("main.js has no groundAt(x, z) sampler")
+    if re.search(r"\bgroundY\s*\(", js):
+        fails.append("main.js still calls a game-space groundY(x, y): the "
+                     "game->glTF negation belongs inside groundAt")
+    if "camPlaced" not in js:
+        fails.append("main.js does not snap the camera on its first frame "
+                     "(it lerps in from the origin, i.e. through the terrain)")
+
+    grid = [float(v) for v in
+            re.search(r"data:\[([^\]]*)\]", hj).group(1).split(",")]
+    cols, rows = int(m.group(1)), int(m.group(2))
+    step = float(re.search(r"step:([0-9.]+)", hj).group(1))
+
+    def h_at(c, r):
+        return grid[r * cols + c]
+
+    # terrain vertices keyed by their game lattice point (glTF z = -game y)
+    tverts = {}
+    for node in [n for n in g["nodes"] if (n.get("name") or "").startswith("intro")]:
+        prim = g["meshes"][node["mesh"]]["primitives"][0]
+        pos = read(prim["attributes"]["POSITION"])
+        for i in range(0, len(pos), 3):
+            tverts[(round(pos[i]), round(-pos[i + 2]))] = pos[i + 1]
+
+    agree = disagree = 0
+    worst_transposed = 0.0
+    for gx, gy in ((100, 128), (180, 60), (60, 180), (90, 300), (200, 200)):
+        tv = tverts.get((gx, gy))
+        if tv is None:
+            continue
+        c, r = int(round(gx / step)), int(round(gy / step))
+        if abs(h_at(c, r) - tv) < 0.05:
+            agree += 1
+        else:
+            disagree += 1
+        worst_transposed = max(worst_transposed, abs(h_at(r, c) - tv))
+    if disagree or agree < 3:
+        fails.append(f"height.js is not indexed in game (x, y): {agree} of "
+                     f"{agree+disagree} lattice points match the terrain mesh")
+    if worst_transposed < 1.0:
+        fails.append("the height grid is symmetric under (x, y) -> (y, x), so "
+                     "this check cannot detect a transposed sampler")
+
     if fails:
         for f in fails:
             print(f"FAIL {f}")
         return 1
     print(f"web export ok: buffers linked, {100*share:.0f}% of {up+down:,} "
-          f"terrain triangles face up, height.js {m.group(1)}x{m.group(2)}, "
-          f"3 vendor modules, height.js referenced")
+          f"terrain triangles face up, height.js {m.group(1)}x{m.group(2)} "
+          f"(game x,y indexed; a transposed read is off by {worst_transposed:.1f} m "
+          f"here), 3 vendor modules, height.js referenced, camera snaps on "
+          f"frame 1")
     return 0
+
+
+def choose_spawn(w):
+    """Pick a start point the third-person camera can actually work at.
+
+    The original player start is not in the map payload: there is no MAP_SPAWN
+    record, and the 出生点 columns that do exist are in npcmaketabedit.gbc, the
+    server's *monster generator* table.  So derive one instead of guessing.
+    The centroid of the map's fixed prop placements is the village (精灵小镇),
+    and the flattest ground within 80 m of it is where a 14 m orbit does not
+    end up buried in a hillside.
+
+    This matters because the map is steep: it spans -50 to +115 m over 512 m,
+    and the old hardcoded (128, 128) sits on a 57-degree slope -- the ground
+    14 m behind it is 21.7 m *higher* than the spawn, so the camera's orbit
+    position was 13 m underground.  That, not a prop-scale error, is what
+    "the camera spawns inside geometry" was.
+
+    Returns game-space metres (x, y).
+    """
+    hf, step = w.hf, R.TERRAIN_STEP
+    rows, cols = hf.shape
+    xs, ys = [], []
+    for m, mox, moy in w.placements():
+        if len(m) >= 7:
+            xs.append(m[2] + mox)
+            ys.append(m[3] + moy)
+    if not xs:                                     # no props: use map centre
+        return (cols - 1) * step / 2, (rows - 1) * step / 2
+    cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+
+    def relief(x, y):
+        c = int(round(x / step))
+        r = int(round(y / step))
+        h0 = hf[r, c]
+        worst = 0.0
+        for a in range(0, 360, 45):
+            ca, sa = math.cos(math.radians(a)), math.sin(math.radians(a))
+            for d in (6.0, 10.0, 14.0):
+                cc = min(cols - 1, max(0, int(round((x + ca * d) / step))))
+                rr = min(rows - 1, max(0, int(round((y + sa * d) / step))))
+                worst = max(worst, abs(hf[rr, cc] - h0))
+        return worst
+
+    best = None
+    for r in range(0, rows, 2):
+        for c in range(0, cols, 2):
+            x, y = c * step, r * step
+            if hf[r, c] < 15.0:                    # the map has a flat floor
+                continue                           # at z=-50; skip it
+            dist = math.hypot(x - cx, y - cy)
+            if dist > 80.0:
+                continue
+            score = relief(x, y) + 0.02 * dist     # flat first, then near
+            if best is None or score < best[0]:
+                best = (score, x, y, hf[r, c], dist)
+    if best is None:
+        return cx, cy
+    return best[1], best[2]
 
 
 def main():
@@ -831,11 +1083,15 @@ def main():
 
     # ---------------- height sampler ----------------
     hf = w.hf.astype(np.float32)
+    sx, sy = choose_spawn(w)
     js = ("window.HEIGHT={x0:0,y0:0,step:%r,cols:%d,rows:%d,data:%s};"
+          "window.SPAWN={x:%r,z:%r};"
           % (R.TERRAIN_STEP, hf.shape[1], hf.shape[0],
-             "[" + ",".join("%g" % v for v in hf.reshape(-1)) + "]"))
+             "[" + ",".join("%g" % v for v in hf.reshape(-1)) + "]",
+             sx, -sy))
     (OUT / "height.js").write_text(js, encoding="utf-8")
-    print(f"  height.js: {hf.shape[1]}x{hf.shape[0]} @ {R.TERRAIN_STEP} m")
+    print(f"  height.js: {hf.shape[1]}x{hf.shape[0]} @ {R.TERRAIN_STEP} m, "
+          f"spawn game ({sx:.0f}, {sy:.0f}) = glTF ({sx:.0f}, {-sy:.0f})")
 
     # ---------------- actor ----------------
     ga = Gltf("actor")

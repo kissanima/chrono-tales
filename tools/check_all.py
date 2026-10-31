@@ -162,14 +162,23 @@ CHECKS = [
     Check("web-export", ["tools/export_web.py", "--check"],
           r"web export ok: .*100% of \d[\d,]* terrain triangles face up",
           forbid=r"FAIL",
-          why="the three.js client fails SILENTLY -- a blank canvas with no "
-              "visible error. All four bugs found in it were structural: a glTF "
-              "buffer with no uri (the loader then wants a GLB chunk), inverted "
-              "terrain winding (0% of 196,608 triangles faced up, so backface "
-              "culling hid the ground), a missing vendored "
-              "utils/BufferGeometryUtils.js (the module graph dies before "
-              "main.js runs), and no <script src=height.js> (window.HEIGHT "
-              "undefined -> throws on the first frame)"),
+          why="the three.js client fails SILENTLY -- a blank canvas, or worse a "
+              "screen full of one texture, with no visible error. Every bug "
+              "found in it was structural: a glTF buffer with no uri (the loader "
+              "then wants a GLB chunk), inverted terrain winding (0% of 196,608 "
+              "triangles faced up, so backface culling hid the ground), a "
+              "missing vendored utils/BufferGeometryUtils.js (the module graph "
+              "dies before main.js runs), no <script src=height.js> "
+              "(window.HEIGHT undefined -> throws on the first frame), and a "
+              "skinned primitive whose indices were offset by the cumulative "
+              "vertex count -- each part owns its own POSITION buffer, so 5,700 "
+              "of 7,000 indices read past the end and the GPU stretched garbage "
+              "across the frame while every CPU-side bounds check still said "
+              "1.9 m. Also pinned: height.js must be indexed in game (x, y) -- a "
+              "transposed read is off by up to 52 m here yet agrees exactly at "
+              "the symmetric spawn (128, 128), which is why it hid -- and the "
+              "camera must snap on its first frame instead of lerping in from "
+              "the world origin, i.e. through the terrain"),
 ]
 
 # checks that only make sense once the caf track has landed

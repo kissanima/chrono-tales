@@ -136,8 +136,16 @@ class CDP:
                 return msg.get("result", {})
 
     def eval(self, expr):
+        # awaitPromise so a probe can hand back a Promise (e.g. "move for 2.5 s,
+        # then report") -- for a plain value it resolves immediately anyway.
         r = self.call("Runtime.evaluate", expression=expr, returnByValue=True,
-                      awaitPromise=False)
+                      awaitPromise=True)
+        # A throwing expression otherwise comes back as None, which reads
+        # exactly like "the value is null" -- say so instead.
+        if "exceptionDetails" in r:
+            d = r["exceptionDetails"]
+            msg = (d.get("exception") or {}).get("description") or d.get("text")
+            return f"JS EXCEPTION: {msg}"
         return r.get("result", {}).get("value")
 
 

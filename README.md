@@ -132,7 +132,8 @@ python tools/render_scenes.py            # flat top-down map of every scene
 
 # web client (three.js): export the world + actor, then verify the export
 python tools/export_web.py               # -> extracted/web/ (glTF + height.js + client)
-python tools/export_web.py --check       # 4 invariants, exit 1 (silent-failure guard)
+python tools/export_web.py --check       # 8 invariants, exit 1 (silent-failure guard)
+python tools/cdp_eval.py URL --js EXPR   # ask the running client what it thinks
 
 # everything at once
 python tools/check_all.py                # 21 invariants, exit 1 on any failure
@@ -197,14 +198,32 @@ any that are missing.
 That client fails *silently* — a blank canvas with no visible error — so every
 structural property it needs is pinned by `--check`: buffers must carry a
 `uri`, 100% of the terrain triangles must face up, `height.js` must be
-referenced, and the three vendored modules must exist. To capture a frame
-headlessly (the plain `--screenshot` flag fires before an async glTF load
-finishes, giving a blank canvas):
+referenced, the three vendored modules must exist, no primitive may index past
+its own vertex buffer, `height.js` must be indexed in game `(x, y)` (with a
+transposed read shown to be off by tens of metres), and the camera must snap on
+its first frame. To capture a frame headlessly (the plain `--screenshot` flag
+fires before an async glTF load finishes, giving a blank canvas):
 
 ```bash
 python tools/cdp_shot.py "http://127.0.0.1:8731/index.html" out.png \
     --ready "document.getElementById('stat').textContent==='loaded'"
 ```
+
+`tools/cdp_eval.py` is the companion: it evaluates JS in the loaded page and
+prints the value, which is how "the canvas is brown" was turned into "the actor
+alone covers 766k of 770k pixels". The client exposes `window.__ct` (scene,
+camera, player, sampler, mixer, `setCam()`) for exactly this.
+
+**The actor is exported in bind pose.** The five clips in the action pack
+(`stand01`, `run`, `jumpstart`, `jumping`, `jumpdown`) belong to rig `2682c5d5`,
+a 43-bone *vehicle*: its bones include `Bip01 penqi01..04` ("jets") and
+`Bip01 F/B Lun` ("front/rear wheel"), 12 of its names do not exist in the
+119-bone body rig, and for the 31 names the two rigs share the bind pose
+disagrees on every one — up to 90° of rotation and 96 cm of offset. Driving the
+body with those rotations deformed it into a 3.5 m tangle. `export_actor`
+therefore checks rig compatibility and refuses a foreign clip, recording why in
+`asset.extras.animations_skipped`. Human clips would have to come from an
+action pack not yet located.
 
 Every figure on the page is read from the generated data (manifests, `_index`
 files, `gbc_index/data.json`) rather than hardcoded, so a stale count is

@@ -4,6 +4,42 @@ Handoff log. Newest entry on top. Keep each entry under 20 lines.
 
 ---
 
+## 2026-10-31 (17) — the actor was never a sliver: an index-buffer bug
+
+**Status:** DONE
+
+**What was done:** Ran down entry (16)'s two open items; **both diagnoses were
+wrong**, and the real defect was one level lower.
+* "137-vertex sliver" was a misread of `primitives[0]` — the actor has 7
+  primitives totalling 2,279 verts. Real cause of the brown screen: each part
+  owns its own POSITION buffer, but `export_actor` offset its indices by the
+  **cumulative** vertex count, so 5,700 of 7,000 indices read past the end. The
+  GPU stretched garbage across the frame; every CPU bounds check still said
+  1.9 m because `getVertexPosition()` never touches the index buffer. Hiding the
+  actor changed 766,216 of 770,000 pixels.
+* The 5 clips in the action pack belong to rig `2682c5d5`, a **43-bone vehicle**
+  (bones `Bip01 penqi01..04` "jets", `*_Lun` "wheels"), which disagrees with the
+  body bind pose on **0/31** shared names (up to 90°, 96 cm). Driving the body
+  with them deformed it to 3.5 m. Exporter now verifies rig compatibility and
+  exports bind pose when the rig is foreign.
+* `height.js` is game-indexed; both client call sites passed `(game y, game x)`
+  — identical at the symmetric spawn (128,128), **52 m wrong** elsewhere.
+* Camera lerped in from the world origin (a second inside the terrain) and had
+  no terrain awareness; now snaps on frame 1 and pulls in along the orbit ray.
+  Spawn is derived from the terrain (flattest ground near the village), since
+  the map has no spawn record and the old (128,128) sat on a 57° slope.
+* Hair joint indices are per-rig (its rig has 109 bones) — now remapped by name.
+* `export_web.py --check` 4 → 8 invariants (index range, sampler orientation
+  with a transposed-read distance, camera snap), each proven to fail by
+  re-injection. New `tools/cdp_eval.py` for querying the live client.
+
+**Next Steps:** No human animation clips located yet — look for another action
+pack. `vendor/` three.js is still hand-placed.
+
+**Blockers:** None. Suite 21/21.
+
+---
+
 ## 2026-10-31 (16) — edit → re-export → browser loop PROVEN; 4 client bugs fixed
 
 **Status:** DONE
@@ -28,9 +64,11 @@ Handoff log. Newest entry on top. Keep each entry under 20 lines.
   a JS condition before capturing. `--screenshot` alone fires before an async
   glTF load and yields a blank canvas — do not trust it.
 
-**Next Steps:** actor exports as a 137-vertex, 0.4 m sliver (should be 2,279
+**Next Steps:** ~~actor exports as a 137-vertex, 0.4 m sliver (should be 2,279
 verts / 1.75 m), and props render at the wrong scale, so the third-person camera
-spawns inside geometry. That is the parallel agent's remaining work, not decode.
+spawns inside geometry.~~ **Both wrong — see (17).** The actor was always 2,279
+verts; the sliver was `primitives[0]` alone, and the brown screen was an
+index-buffer overrun, not prop scale.
 
 **Blockers:** None. Suite 21/21. three.js in `vendor/` is hand-placed, not
 regenerated — a wiped `extracted/` needs r160 re-fetched.
