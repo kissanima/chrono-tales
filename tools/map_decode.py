@@ -23,33 +23,39 @@ order, and `OnEditData()` reads it back with the same indices.
 and each of the six layers by `MAPLAYER_TEXNAME, MAPLAYER_TRTYPE, MAPLAYER_LEAVE`.
 Each `MAP_MODELDATA` row is indexed by the 18-name `FIXMODEL_*` enum.
 
-Height field layout (`MAP_HEIGHTDATA`), determined from the data:
+Height field layout (`MAP_HEIGHTDATA`), decoded from chronotales.exe:
 
-    u16 version (=2)          \\ 12-byte header, identical in all six copies
-    u32  a (=64176)            |
-    u32  b (=49864)            |
-    u16  c (=0x4461)          /
-    129 * 258 bytes           height grid, 0..255
-    u32                       trailer (not crc32/adler32/sum)
+    u32  tag (=0xFAB00002)     \ 12-byte header, identical in all six copies
+    f32  minz (= -100.0)        |
+    f32  maxz (= 900.0)        /
+    129 * 258 bytes           ONE 129x129 grid of u16, split into two byte
+                              planes: first 16,641 = high byte, second = low
+    u32                       trailer = rolling hash, see below
 
-The grid is **two stacked 129x129 terrain patches**, matching `TerrainLodSIZE`
-256 at half resolution: 129x129 vertices per patch, and the layer map below is
-exactly 2x that in each axis (2 x 256x256).  Patch 0 is flat plains (values
-12..41), patch 1 is mountains (0..255) — the steep half looks like noise by
-entropy (7.95 bits/byte) but renders as coherent relief; the high entropy is
-quantisation dithering, which only appears where there is a gradient.
+    h16 = (plane1[i] << 8) | plane2[i]
+    z   = minz + h16 * (maxz - minz) / 65530
 
-Heights are 0..255 over `DEFWORLD_MINZ..DEFWORLD_MAXZ` = -50..450 world units
-(`#define` in `def.gbc`), so `z = -50 + v * 500 / 255`.
+That is not inferred from the data.  The `.zmap` record reader at `0x4ee4f9`
+demands a record length of exactly `0x8212` = 33,298 = 12 + 2*16,641 + 4, reads
+minz/maxz from header +4/+8, points a second cursor at `first + 129*129` and
+does `mov dh,[edi] / mov dl,[ecx]`, then multiplies by `1/65530` (`0x6d17e8`)
+and adds minz.  The saver at `0x4ee45a` writes the matching pair
+(`mov [esi],dl` high byte, `mov [edi],al` low byte) using the reciprocal 65.53,
+and 65.53 * 1000 = 65,530.
 
-The grid is bytes, not u16: 45.3% of aligned u16 pairs have high byte == low
-byte where chance would give ~0.4%, i.e. the pairs are two adjacent cells that
-happen to be equal.
+The trailer is a rolling hash, verified on all six maps:
+
+    h = 0
+    for v in h16: h = ((h << 1) ^ v) & 0xFFFFFFFF
+
+Earlier notes here read the block as two stacked 8-bit patches over -50..450.
+Both were wrong: plane 2 is the low byte (which is why it spans 0..255 and
+correlates with nothing), and the -50..450 range only looked right because it
+crosses zero exactly where the village sits.
 
 The layer map is 3 bytes per cell, **interleaved** (a planar reading is pure
-noise: adjacent-byte delta 255 vs 0 for interleaved).  For `w100` it is almost
-entirely two colours — `ff0000` above the midpoint and `000000` below — plus a
-small painted patch, i.e. the map is barely textured.
+noise: adjacent-byte delta 255 vs 0 for interleaved).  Its two 256x256 halves
+are the top and bottom three weight channels, not a map plus padding.
 
 Output: extracted/maps/
 """
@@ -74,8 +80,9 @@ OUT = HERE.parent / "extracted" / "maps"
 MAP_BLOBS = ["4514d98f", "6010fb33", "6b45f638", "9feba4ac", "cc5de97f",
              "da80ff38"]
 
+HEIGHT_N = 129                 # actual grid is 129 x 129 u16
 HEIGHT_HDR = 12
-HEIGHT_W, HEIGHT_H = 129, 258
+HEIGHT_W, HEIGHT_H = 129, 258   # file layout: 258 rows of 129 bytes
 HEIGHT_TRAILER = 4
 
 MAPBASE = ["layer1", "layer2", "layer3", "layer4", "layer5", "layer6",
@@ -97,24 +104,35 @@ def flatten(v, depth=0):
 
 
 def decode_height(blob):
-    """-> dict(header, grid, trailer)."""
+    """-> dict(header, grid of u16, trailer, trailer_ok)."""
     if len(blob) != HEIGHT_HDR + HEIGHT_W * HEIGHT_H + HEIGHT_TRAILER:
         raise ValueError(f"height blob is {len(blob)} bytes, expected "
                          f"{HEIGHT_HDR + HEIGHT_W * HEIGHT_H + HEIGHT_TRAILER}")
-    ver, a, b, c = struct.unpack_from("<HIIH", blob, 0)
-    grid = blob[HEIGHT_HDR:HEIGHT_HDR + HEIGHT_W * HEIGHT_H]
+    tag, minz, maxz = struct.unpack_from("<Iff", blob, 0)
+    n = HEIGHT_N * HEIGHT_N
+    hi = blob[HEIGHT_HDR:HEIGHT_HDR + n]
+    lo = blob[HEIGHT_HDR + n:HEIGHT_HDR + 2 * n]
+    grid = [(hi[i] << 8) | lo[i] for i in range(n)]
+    h = 0
+    for v in grid:
+        h = ((h << 1) ^ v) & 0xFFFFFFFF
     trailer = struct.unpack_from("<I", blob, len(blob) - 4)[0]
-    return {"version": ver, "a": a, "b": b, "c": c,
-            "width": HEIGHT_W, "height": HEIGHT_H,
+    return {"tag": tag, "minz": minz, "maxz": maxz,
+            "width": HEIGHT_N, "height": HEIGHT_N,
             "min": min(grid), "max": max(grid),
-            "grid": grid, "trailer": trailer}
+            "grid": grid, "trailer": trailer, "trailer_ok": h == trailer}
 
 
 def write_height_pngs(path_stem, grid, scale=3):
-    """Plain greyscale + a colourised relief, both scaled up."""
+    """Plain greyscale + a colourised relief, both scaled up.
+
+    `grid` is the 16-bit height field (0..65530).  The hillshade divisor is
+    tuned for h16 units: a 2 m cell steps by ~40 units on a normal slope, so
+    24.0 (the old 8-bit constant) would saturate everywhere.
+    """
     lo, hi = min(grid), max(grid)
     span = max(1, hi - lo)
-    w, h = HEIGHT_W, HEIGHT_H
+    w = h = HEIGHT_N
     grey = bytearray(w * scale * h * scale * 3)
     relief = bytearray(w * scale * h * scale * 3)
     for y in range(h * scale):
@@ -129,7 +147,7 @@ def write_height_pngs(path_stem, grid, scale=3):
             # simple hillshade: compare with the cell below-right
             gx = grid[sy * w + min(w - 1, sx + 1)] - v
             gy = grid[min(h - 1, sy + 1) * w + sx] - v
-            shade = max(-1.0, min(1.0, (gx + gy) / 24.0))
+            shade = max(-1.0, min(1.0, (gx + gy) / 400.0))
             r = int(max(0, min(255, t * 200 + 40 + shade * 70)))
             gg = int(max(0, min(255, t * 170 + 60 + shade * 70)))
             b = int(max(0, min(255, t * 120 + 60 + shade * 50)))
@@ -241,11 +259,12 @@ def decode_scene(blob_id, rec, out_dir, source):
         "map_name": map_name,
         "version": ver,
         "height": {k: h[k] for k in
-                   ("version", "a", "b", "c", "width", "height",
-                    "min", "max", "trailer")},
-        "height_patches": {"count": 2, "each": [129, 129],
-                           "z_world": [-50, 450],
-                           "z_of_value": "-50 + v * 500 / 255"},
+                   ("tag", "minz", "maxz", "width", "height",
+                    "min", "max", "trailer", "trailer_ok")},
+        "height_decode": {"grid": [129, 129], "bits": 16,
+                          "planes": "high then low byte",
+                          "z_world": [h["minz"], h["maxz"]],
+                          "z_of_value": "minz + v * (maxz-minz) / 65530"},
         "layer": {"version": lay["version"], "width": lay["width"],
                   "height": lay["height"]},
         "layers": layers,

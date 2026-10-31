@@ -26,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from gpak import hash_name  # noqa: E402
+import gpak  # noqa: E402
 
 MODEL_RE = re.compile(r"^model/[0-9A-Fa-f]{8}\.fw3$")
 TEX_RE = re.compile(r"^tex/[0-9A-Fa-f]{8}\.(jpg|png)$")
@@ -33,27 +34,31 @@ TEX_RE = re.compile(r"^tex/[0-9A-Fa-f]{8}\.(jpg|png)$")
 # Identified by looking at the archive's square power-of-two images.  The
 # material's own extension is a hard constraint (every hash-verified pair has
 # matching extensions), which cuts the candidate set to the 10 model-texture
-# PNGs, and the art itself is unambiguous: hanging vines, a teal tree, a
-# yellow-green tree, and -- for the mesh whose material is called "小镇门.png"
-# but is actually a drooping flower plant -- pink flower buds and a stem
-# (696ebe10) mapped to the buds/stem/leaves.  These are content matches, NOT
-# hash-verified.
-INFERRED = {
-    "新手村藤.png": (0x25F654F0, "hanging vines, alpha cutout"),
-    "新手村树叶.png": (0x37DB0179, "teal tree canopy, alpha cutout"),
-    "新手村树叶1.png": (0x67A10380, "yellow-green tree canopy, alpha cutout"),
-    "小镇门.png": (0x696EBE10, "pink flower buds and stem (despite the name)"),
-    "顶01.jpg": (0xCDDA84AF, "orange roof tiles"),
-    "墙01.jpg": (0xA3818155, "stone brick with moss"),
-    "木01.jpg": (0x05C8952E, "dark vertical planks"),
-    "木02.jpg": (0x55747BAC, "dark timber beams"),
-    "顶02.jpg": (0x659837F7, "pale cracked stone"),
-}
-
-# Plausible but not demonstrable: the tree bark and the altar.
-TENTATIVE = {
-    "新手村树干.jpg": (0x184A22B3, "dark bark-like grain"),
-    "圣坛003.jpg": (0x09E3A85E, "grey stone slabs"),
+# AUTHORITATIVE: the six intro scene maps (.zmap) carry the game's own
+# name -> file-GUID bindings (see tools/zmap.py / GPAK_FORMAT.md 4.10).  Each
+# GUID below hashes to a live archive entry -- 108/108 object-texture
+# references verify -- so every entry here is hash-verified.  This table
+# SUPERSEDES the earlier visual/tentative guesses and corrects three of them:
+# 木01/木02 were swapped, the old 圣坛003 tentative was actually 石头03, and
+# 顶02/墙01 had look-alike files.  It also adds four names the guessing stage
+# never had: 木箱, 石头01, 石头02, 石头03.
+ZMAP = {
+    "圣坛003.jpg": (0x7F2AECB1, "9C3F8774.jpg via intro zmap"),
+    "墙01.jpg": (0xA72C4AF3, "5F42D358.jpg via intro zmap"),
+    "小镇门.png": (0x696EBE10, "5380F0A5.png via intro zmap"),
+    "新手村树叶.png": (0x67A10380, "2B0B24D1.png via intro zmap"),
+    "新手村树叶1.png": (0x37DB0179, "84364C81.png via intro zmap"),
+    "新手村树干.jpg": (0x1F640537, "2179A47E.jpg via intro zmap"),
+    "新手村藤.png": (0x25F654F0, "6AF77F91.png via intro zmap"),
+    "木01.jpg": (0x55747BAC, "5A1005D7.jpg via intro zmap"),
+    "木02.jpg": (0x4F33AE61, "CF794CC6.jpg via intro zmap"),
+    "木箱.jpg": (0x20916C6A, "DF514440.jpg via intro zmap"),
+    "石头01.png": (0x4C117E2E, "B35D1B68.png via intro zmap"),
+    "石头02.jpg": (0xB2A097B5, "99888485.jpg via intro zmap"),
+    "石头03.png": (0x09E3A85E, "CCAED5C9.png via intro zmap"),
+    "蘑菇001.jpg": (0xDD462F88, "BDBC1E57.jpg via intro zmap"),
+    "顶01.jpg": (0xCDDA84AF, "A1C6FE42.jpg via intro zmap"),
+    "顶02.jpg": (0x63A3CFE3, "B642CAD3.jpg via intro zmap"),
 }
 
 # Meshes that ship with no material table (the .53wf doesn't carry a MAT3
@@ -66,14 +71,30 @@ MESH_TEX = {
 
 
 def load_archives():
-    """hash -> (archive, path) for every entry in both archives."""
+    """hash -> (archive, path) for every entry in both archives.
+
+    Prefers files that actually exist on disk: since the asset manifest was
+    applied, extracted files live under their canonical paths
+    (netpak/tex/<guid>.<ext>, netpak/model/<guid>.fw3, ...), and an entry's
+    archive hash is the MPQ hash of that relative path -- so hash the
+    relative path of every real file and fall back to the (stale)
+    _manifest.csv `unknown/<hash>` paths only when the file is missing.
+    """
     out = {}
     for arc in ("netpak", "sysnet"):
-        man = os.path.join(ROOT, "extracted", arc, "_manifest.csv")
-        if not os.path.exists(man):
-            continue
-        for r in csv.DictReader(open(man, encoding="utf-8")):
-            out.setdefault(int(r["hash"], 16), (arc, r["path"]))
+        base = os.path.join(ROOT, "extracted", arc)
+        for dirpath, _, files in os.walk(base):
+            for fn in files:
+                rel = os.path.relpath(os.path.join(dirpath, fn), base)
+                rel = rel.replace("\\", "/")
+                if "/" not in rel or rel.startswith("_") or rel.endswith(".var"):
+                    continue
+                h = gpak.hash_name(rel.lower(), 0) & 0xFFFFFFFF
+                out.setdefault(h, (arc, rel))
+        man = os.path.join(base, "_manifest.csv")
+        if os.path.exists(man):
+            for r in csv.DictReader(open(man, encoding="utf-8")):
+                out.setdefault(int(r["hash"], 16), (arc, r["path"]))
     return out
 
 
@@ -165,23 +186,20 @@ def main():
     for k, v in sorted(byname.items()):
         print(f"  {k:16} -> {v['tex_hash']:08x}  ({v['tex_entry'][0]}/{v['tex_entry'][1]})  via {v['via']}")
 
-    for tag, table in (("visual", INFERRED), ("tentative", TENTATIVE)):
+    for tag, table in (("zmap", ZMAP),):
         for name, (h, note) in table.items():
-            if name in byname:
-                continue
             ent = arcs.get(h)
             if not ent:
                 print(f"  !! {tag} texture not in archive: {name} -> {h:08x}")
                 continue
+            if name in byname and byname[name].get("verified"):
+                continue          # varbin hash link already authoritative
             byname[name] = {"tex_hash": h, "tex_entry": ent, "via": note,
-                            "verified": False, "confidence": tag}
+                            "verified": True, "confidence": "hash"}
 
     nv = sum(1 for v in byname.values() if v.get("verified"))
-    ni = sum(1 for v in byname.values()
-             if not v.get("verified") and v.get("confidence") == "visual")
-    nt = len(byname) - nv - ni
     print(f"\ntotal material names mapped: {len(byname)}  "
-          f"(hash-verified {nv}, visual {ni}, tentative {nt})")
+          f"(hash-verified {nv})")
 
     # ---- mesh-level fallback (no material table, but we know the texture) ----
     by_mesh = {}

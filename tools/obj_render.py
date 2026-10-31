@@ -115,7 +115,8 @@ def rot(yaw, pitch, up="z"):
 
 
 def render(verts, tris, size, yaw, pitch, zoom=0.86, bg=BG, up="z",
-           uvs=None, checker=0, texes=None, tri_tex=None):
+           uvs=None, checker=0, texes=None, tri_tex=None, tri_rgb=None,
+           fit="box", frame=None):
     w = h = size
     pix = bytearray(bytes(bg) * (w * h))
     zbuf = [1e30] * (w * h)
@@ -139,14 +140,30 @@ def render(verts, tris, size, yaw, pitch, zoom=0.86, bg=BG, up="z",
     ext = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)) or 1.0
 
     m = rot(yaw, pitch, up)
-    scale = (size * 0.5 * zoom) / ext
-    proj = []
+    # rotate every vertex about the bbox centre first, so the frame can be
+    # measured in view space (fit="screen") instead of on the 3D box.
+    rv = []
     for (x, y, z) in verts:
         x, y, z = x - cx, y - cy, z - cz
-        rx = m[0][0] * x + m[0][1] * y + m[0][2] * z
-        ry = m[1][0] * x + m[1][1] * y + m[1][2] * z
-        rz = m[2][0] * x + m[2][1] * y + m[2][2] * z
-        proj.append((w * 0.5 + rx * scale, h * 0.5 - ry * scale, rz * scale))
+        rv.append((m[0][0] * x + m[0][1] * y + m[0][2] * z,
+                   m[1][0] * x + m[1][1] * y + m[1][2] * z,
+                   m[2][0] * x + m[2][1] * y + m[2][2] * z))
+    ox = oy = 0.0
+    if frame is not None:
+        # explicit view-space frame (ox, oy, ext), for animation strips where
+        # every frame must share one camera or the model appears to jitter.
+        ox, oy, ext = frame
+    elif fit == "screen":
+        # fit the projected silhouette: a long, thin object (a bike at 4.05 m
+        # long x 1.28 m wide) otherwise gets scaled to the 3D diagonal and
+        # sits small with dead margin on two sides.
+        rxs = [rv[i][0] for i in used]
+        rys = [rv[i][1] for i in used]
+        ext = max(max(rxs) - min(rxs), max(rys) - min(rys)) or 1.0
+        ox, oy = (max(rxs) + min(rxs)) / 2, (max(rys) + min(rys)) / 2
+    scale = (size * 0.5 * zoom) / ext
+    proj = [(w * 0.5 + (rx - ox) * scale, h * 0.5 - (ry - oy) * scale, rz * scale)
+            for (rx, ry, rz) in rv]
 
     # three-light studio: warm key from upper-right, cool fill from the left,
     # and a facing-based rim.  All two-sided (|dot|) so open meshes stay readable.
@@ -181,7 +198,8 @@ def render(verts, tris, size, yaw, pitch, zoom=0.86, bg=BG, up="z",
         lam2 = max(0.0, abs(d2))
         shade = 0.14 + 0.56 * lam + 0.24 * lam2 + 0.16 * (1.0 - facing) ** 2
         shade = min(1.0, shade)
-        col = (int(FILL[0] * shade), int(FILL[1] * shade), int(FILL[2] * shade))
+        base = tri_rgb[ti] if tri_rgb is not None and ti < len(tri_rgb) and tri_rgb[ti] else FILL
+        col = (int(base[0] * shade), int(base[1] * shade), int(base[2] * shade))
 
         ta, tb, tc = tri[0][1], tri[1][1], tri[2][1]
         tex = None

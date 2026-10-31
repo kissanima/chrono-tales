@@ -87,9 +87,61 @@ CHECKS = [
           r"all checks passed",
           why="bone range, weight sum, unit normals, index range across 9 .cmz"),
 
+    Check("action-links", ["tools/action_link.py"],
+          r"_D/_Z alias cross-check: 250 pairs, 0 disagreements",
+          forbid=r"MISMATCH|alias cross-check failed",
+          why="every _D alias must name the same action GUID as its _Z sibling's "
+              "inline spec -- 250 independent pairs, so a wrong spec parser "
+              "cannot pass"),
+
+    Check("anim-render", ["tools/render_anim.py", "--check"],
+          r"anim check passed",
+          why="the one shipped actor must bind 5/5 textures through its "
+              "SysFileVer spec, keep every face inside the vertex range (the "
+              "part base is a vertex offset, not a face count) and keep UVs in "
+              "0..1 -- a wrong base or a wrong UV index moves these numbers"),
+
+    Check("height-decode", ["tools/render_scene3d.py", "--check"],
+          r"height check passed \(6 maps, \d+ props\)",
+          why="MAP_HEIGHTDATA is a 16-bit grid stored as two 8-bit planes, and "
+              "the .zmap loader (0x4ee4f9) fixes all four numbers: a 0x8212 "
+              "record length, the -100/900 header floats, the (h<<1)^h16 "
+              "trailer, and props authored at z=0 landing on terrain at z~0. "
+              "Reading it as 8-bit passes none of these"),
+
+    Check("world-tiling", ["tools/render_scene3d.py", "--check"],
+          r"world check passed \(seam mean \|dh16\| = [0-9.]+, \d+ props\)",
+          why="a .zmap is one 256 m tile, not a map: MAKEMAPID(ix,iy)=ix+iy*1000 "
+              "(def.gbc:110) makes the file name a grid cell, and the six tiles "
+              "are a 3x2 block. Every shared edge must agree to a few units of "
+              "65,530 while the reversed pairing must not, which is what pins "
+              "the adjacency direction instead of assuming it"),
+
+    Check("instance-decode", ["tools/render_scene3d.py", "--check"],
+          r"\d+ decorations, \d+ instances.*instance check passed",
+          why="MAP_WIDGETDATA's instance blob is a 16-byte float4 header plus "
+              "count x 9-byte records (x,y u16 cm; dz i16 cm; two signed "
+              "direction bytes /127; scale u8 /16). The header is a wind "
+              "parameter, not a size -- the client scales it by the frame "
+              "delta and passes it to the renderer as a vec4 uniform -- so "
+              "reading it as a size shrank every grass/flower/shrub to 20%"),
+
+    Check("camera", ["tools/render_scene3d.py", "--check"],
+          r"camera check passed",
+          why="the scene camera must look DOWN at the world. It once looked up "
+              "from underneath the terrain, which put the ground in front of "
+              "everything: the buildings were invisible and every tree showed "
+              "only the underside of its canopy"),
+
     Check("explorer", ["tools/build_explorer.py"],
-          r"archive\s+433/484 filenames recovered",
-          why="the explorer's figures are derived, so this re-reads every index"),
+          r"tables\s+42 \(19,634 rows.*\n"
+          r".*map imgs 31 referenced, missing 0",
+          why="the explorer's figures are derived, so this re-reads every index. "
+              "42/19,634 counts varbin payloads only -- the two cross-reference "
+              "CSVs action_link.py writes into tables/ are labelled derived and "
+              "must not inflate the payload count. 'map imgs' walks every image "
+              "the Maps view references (relief/layer by archive hash, the 3D "
+              "renders by tile stem) and fails on a dangling path"),
 ]
 
 # checks that only make sense once the caf track has landed

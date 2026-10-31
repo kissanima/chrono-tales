@@ -23,7 +23,7 @@ in-house engine called **GBox2**, with:
   `GNetPakIO`. `InitPak(pakname, "sysbin/")` in the embedded script `index.gbc`  
   shows the pak is a *network resource cache* rooted at `sysbin/`.
 
-The two archives are therefore a **page-based mini filesystem**, not a ZIP-alike.
+The two archives are therefore a **page-based mini filesystem**, not a ZIP-alike.  
 
 ---
 
@@ -50,15 +50,15 @@ All integers are little-endian. Page size is **4096**; page *N* lives at `N * 40
 | 0x30 | u32     | first free page                                                    |       1863 |       2748 |
 | 0x34 | 32 B    | zero                                                               |            |            |
 
-`[0x24]` is a **derived counter, not a source of truth**: it equals
-`pageCount − dirPages − freePages`, and also `firstFreePage − dirPages` because
-the packer allocates data pages contiguously upward from `dirPages` and the free
-list is just the trailing run (`pageCount − firstFreePage == freePages` in both
-archives).  The validator at `0x417210` never reads it, so a stale value would
+`[0x24]` is a **derived counter, not a source of truth**: it equals  
+`pageCount − dirPages − freePages`, and also `firstFreePage − dirPages` because  
+the packer allocates data pages contiguously upward from `dirPages` and the free  
+list is just the trailing run (`pageCount − firstFreePage == freePages` in both  
+archives).  The validator at `0x417210` never reads it, so a stale value would  
 go unnoticed — but both shipped archives are consistent.
 
-`[0x10] == 1000 + entryCount` in both archives.  No reader has been found for
-it either; it looks like a schema/version tag that happens to be derived from
+`[0x10] == 1000 + entryCount` in both archives.  No reader has been found for  
+it either; it looks like a schema/version tag that happens to be derived from  
 the entry count.
 
 The validator at `0x417210` checks exactly these: magic, `[4]==0x54`,  
@@ -83,19 +83,19 @@ can binary-search (`0x4174B0`).
 | 0x018 | u16   | constant marker `0xFA21`                                |
 | 0x01A | 510 B | **not initialised** — stale heap bytes written verbatim |
 
-`+0x08` is **not a hash**. Earlier notes called it a "second hash" because it
-does not vary with the name; it is a unix timestamp, and it is the only field in
+`+0x08` is **not a hash**. Earlier notes called it a "second hash" because it  
+does not vary with the name; it is a unix timestamp, and it is the only field in  
 the archive that preserves the *original* asset dates:
 
-| archive | `+0x08` range | `+0x04` / `+0x0C` range |
-| ------- | ------------- | ----------------------- |
-| netpak  | 2011-03-30 … 2013-09-26 | 2013-09-26, 8 minutes wide |
+| archive | `+0x08` range           | `+0x04` / `+0x0C` range     |
+| ------- | ----------------------- | --------------------------- |
+| netpak  | 2011-03-30 … 2013-09-26 | 2013-09-26, 8 minutes wide  |
 | sysnet  | 2011-04-11 … 2013-09-26 | 2013-09-26, 50 minutes wide |
 
-All 484 entries land inside 2005…2014, which a 32-bit hash could not do. The
-hour histogram is a business-day curve once shifted to UTC+8 (sysnet peaks at
-UTC 05:00 = 13:00 CST), and `+0x08 ≤ +0x0C` holds for **every** entry in both
-archives — consistent with a file creation/modification time stored alongside
+All 484 entries land inside 2005…2014, which a 32-bit hash could not do. The  
+hour histogram is a business-day curve once shifted to UTC+8 (sysnet peaks at  
+UTC 05:00 = 13:00 CST), and `+0x08 ≤ +0x0C` holds for **every** entry in both  
+archives — consistent with a file creation/modification time stored alongside  
 the pack time. `+0x04` and `+0x0C` are both pack-run timestamps.
 
 > **There are no filenames in the archive.** The 512-byte tail of each record is the  
@@ -168,6 +168,7 @@ def hash_name(s):                       # s = UTF-16 path, type 0
         b = (b + c + ((b << 5) & 0xFFFFFFFF) + a + 3) & 0xFFFFFFFF
     return a
 ```
+
 
 ### 2.7 Per-file compression wrapper — the `D7 76 23 60` tag
 
@@ -315,6 +316,7 @@ were identified.
 
 Index, dependency graphs and localisation inventory: `gbc_index.py` →
 `extracted/gbc_index/`.
+
 
 ### 4.2 Inside `varbin` — the entity database
 
@@ -618,10 +620,15 @@ are shared by exactly two triangles.
 
 **`MAT3` / `MAT2`** — material entries of `<u16 n> <GBK name> <16 bytes>
 <u16 m> <GBK texture>`. `MAT3` and `MAT2` are the same list at two format
-versions; 13 files use `MAT3`, 9 use `MAT2`. Texture names resolve to files
-(`蘑菇001.jpg`, `木箱.jpg`, `小镇门.png`) but those files are stored under
-hashed names in the archive and the path convention was not recovered, so
-textures are not yet linkable.
+versions; 13 files use `MAT3`, 9 use `MAT2`. The **only** difference is that
+each `MAT3` record is followed by 8 zero bytes and `MAT2` records are not — read
+`MAT2` with the `MAT3` stride and the parser walks past the end of the table
+into the `MESH` header and invents a phantom material. Submesh *i* uses
+material *i*. Texture names resolve to archive files through
+`extracted/models/texmap.json` (see §4.5), so 17 of 19 material names now bind
+|  |  |
+| --- | --- |
+to a real `tex/<guid>.jpg|png`.
 
 **Orientation.** Assets are **metres, +Z up, right-handed**. This is not a guess:
 the mushroom cluster decodes to `z ∈ [0.027, 1.340]` and the altar platform to
@@ -755,32 +762,43 @@ assigned by the art tool, not derivable from the Chinese filename.
 
 **The GUID ↔ filename table** lives in the entity database (varbin), where
 each decoration record stores its model path and texture path as
-consecutive strings.  Parsing 9 such records (covering 5 textures) produces
-4 hash-verified material-name links (the texture extensions match the
-material extensions on all 4) and identifies 6 meshes that resolve
-directly.  The remaining 11 names are not in the decoration table because
-the trees, gate, altar and house textures come from map-instance data the
-client reads at runtime from a `media/map/` folder that isn't shipped with
-this client-only install — the `world/terrain.gbc` script documents the API
-(`OnGetWidgetData(name, sModel, sTex)`), but the ZMAP files that feed it
-aren't here.
+consecutive strings, **and — decisively — in the six `.zmap` intro scene
+maps (§4.7)**: every placed object carries its full
+`modle=,model/<GUID>.fw3;tex=<name>,tex/<GUID>.<ext>;...` material spec,
+and `world[1:]` scenery entries carry an explicit `model/…` + `tex/…` path
+pair.  Hashing all 108 texture references from the scene maps reproduces
+live archive entries — **108/108** — so the mapping is authoritative, not
+inferred.
 
-**What is recovered for the 15 distinct material names** (full table in
-`extracted/models/textures.html`):
+**Resolution status — all 19 distinct material names are hash-verified**
+(full table in `extracted/models/textures.html`, generated by
+`tex_link.py`):
 
-| confidence | how it was resolved | count |
+| source | count | notes |
 |---|---|---|
-| hash | `tex/<GUID>.<ext>` from the varbin decoration table | 4 |
-| visual | material extension picks the format (PNG = alpha cutout), the art matches the mesh unambiguously | 9 |
-| tentative | architectural name fits by role (roof / brick / beam), supported by the house render | 2 |
+| varbin decoration table | 4 | 奇幻灌木, 平原草01, 灌木003, 蘑菇001 |
+| `.zmap` scene specs | +15 | 16 names total, overlapping the above |
+
+The zmap table **corrected three earlier guesses** that had been made
+before the scene maps were decoded: `木01.jpg` / `木02.jpg` were swapped
+(5A1005D7 / CF794CC6), the old "tentative" 圣坛003 file was actually
+石头03 (CCAED5C9), and 顶02 / 墙01 pointed at look-alike files.  It also
+added four names the guessing stage never had: 木箱 (DF514440), 石头01
+(B35D1B68), 石头02 (99888485), 石头03 (CCAED5C9).
 
 Mesh-level fallback handles two meshes that ship with no `MAT3` block at
 all (the crate `879926bf` and the flower `4c85d7c7`): they bind to a
 single texture via the varbin link or visual identification of the mesh.
 
+Result: **9,078 of 11,761 mesh triangles (77%) bind a verified texture**;
+the remainder belong to meshes whose materials name files that simply do
+not ship in this 97-of-8,672-path install.
+
 `tex_link.py` → `extracted/models/texmap.json` (the link table);
 `obj_render.py --texmap extracted/models/texmap.json` → `png_tex/*.png` and
-`textured_sheet.png`; `tex_gallery.py` → `textures.html`.
+`textured_sheet.png`; `tex_gallery.py` → `textures.html`;
+`zmap.py` → `extracted/maps/intro_scenes.json` (scene layouts).
+
 
 ### 4.6 `.cmz` `sbus` skin records — **SOLVED**
 
@@ -878,10 +896,14 @@ n_verts >= 1024  :  three u16 per triangle
 
 - every decoded bone index is in `[0, n_bones)`.
 - weight sum is exactly 1.000 for every vertex.
+|  |  |  |
+| --- | --- | --- |
 - every decoded normal is unit length (`|n| = 1.000`).
 - every triangle index is in `[0, n_verts)`.
 - the stream is **fully consumed** on all 15 parts. Where bytes remain
   between one `sbus` blob and the next marker they are not mesh data at all:
+|  |  |  |
+| --- | --- | --- |
   they are the *next* part's `u32 name_len | GBK name | u32 record_count`
   header (22–33 bytes), which is what pins the MESH layout down.
 
@@ -967,6 +989,7 @@ that is not shipped with the client.
 
 ---
 
+
 ### 4.7 The six map payloads — `.zmap` scene documents
 
 Six of the 48 `varbin` payloads are not tables. They are **map files** — the
@@ -982,7 +1005,7 @@ editor builds it in `ui/video/world.gbc::SaveMapData()` and reads it back in
 | field | enum | content |
 |---|---|---|
 | 0 | `MAP_VER` | `100` — `OnEditData` returns `-2` on any other value |
-| 1 | `MAP_HEIGHTDATA` | height field, 12-byte header + 129×258 bytes + u32 trailer |
+| 1 | `MAP_HEIGHTDATA` | 129×129 16-bit height field: 12-byte header + two 8-bit planes + u32 rolling-hash trailer |
 | 2 | `MAP_LAYERDATA` | `[100, 256, 512, 393216 bytes]` — 24-bit terrain-type map |
 | 3 | `MAP_WIDGETDATA` | `[map name, decorations…]` |
 | 4 | `MAP_DATAEX` | 6 texture layers + light + path layer + fog |
@@ -994,11 +1017,92 @@ layers is `[tex_name, tr_type, leave]` (`MAPLAYER_*`). Every `MAP_MODELDATA` row
 is the 18-name `FIXMODEL_*` enum, so the placement table exports with real
 column names rather than positional ones.
 
-**All six are the same map.** They carry `MAP_VER 100`, the name `w100`, and
-byte-identical 12-byte height headers — six different copies of one scene, each
-with its own terrain. `SaveMapData` writes to
-`RESPATH + OnGetCopyName() + "/" + mapname + ".zmap"`, so the *copy* is what
-distinguishes them, not the map name.
+**`FIXMODEL_*` — the 18 fields of a fixed placement** (`def.gbc:353`):
+
+| # | name | type | meaning |
+|---|---|---|---|
+| 0 | `ID` | int | object id, unique within the tile |
+| 1 | `RESNAME` | str | asset key, resolved through `SysFileVer.var` |
+| 2 | `X` | float | metres |
+| 3 | `Y` | float | metres |
+| 4 | `Z` | float | **offset above the terrain**, not an absolute height |
+| 5 | `SIZE` | float | scale multiplier (`SetScale`) |
+| 6 | `ASPECT` | float | facing in **degrees** (`SetForward`) |
+| 7 | `ANI` | str | animation name |
+| 8 | `PLAYSPEED` | float | |
+| 9 | `PARTICLE` | str | |
+| 10 | `PARTSHOW` | int | 1 = shown |
+| 11–15 | `TIPS`,`SOUND`,`SDELAY`,`VOL`,`STYLE` | | |
+| 16 | `PARAM` | list | |
+| 17 | `HALF` | int | inverted flag (`m_nEyeHalf = !v`) |
+
+Two of these are settled by the shipped script rather than by inference:
+
+* `Z` is relative to the ground — `world.gbc:905`:
+  `hz = GetZHeight(v[FIXMODEL_X], v[FIXMODEL_Y]) + v[FIXMODEL_Z];` and
+  `GFixModel::Build` calls `SetPos(x,y,0)` then `SetGroudHeight(dz)`.
+  The data agrees: across the six tiles `Z` lies in −1.5…0.5 m, and a
+  *terrain-relative* reading puts the props on the surface (median residual
+  1.21 m) where an absolute reading would leave them up to 9 m out.
+* `ASPECT` is degrees — `GFixModel::Build(…, float f)` is called with the
+  default `180` and `SetForward(vData[FIXMODEL_ASPECT], 0)`; the shipped values
+  span −172.6…247.5, which cannot be radians.
+
+`SIZE` multiplies the model's natural size (the flower is 0.76 m tall, the
+shrub 1.73 m, the mushroom 1.31 m), and the shipped values are 0.6, 0.8, 1.0,
+1.48 and 1.8.
+
+**Multi-row props are placed as matched pairs, not duplicated.** The village's
+"house under a tree" is two placements at *identical* x, y, z, `SIZE` and
+`ASPECT`: `精灵小镇_建筑02_Z` → `E2297D8E` is the house (walls/roof/wood, z 0–15.7 m)
+plus the 29 m trunk and vines, and `精灵小镇_建筑201_Z` → `E753DD7C` is the
+53 m leaf canopy (z 10.1–30.6 m) that goes over it. `新手村树1` (`4C3D969F`) /
+`新手村树101` (`99A1D725`) pair the same way at three shared positions. A
+renderer that drops either half is not visibly wrong — the canopy simply
+hides an 11 m house from any angle above the horizon, so both halves must be
+drawn to see the building at all.
+
+**They are not six copies — they are six tiles of one world.** They carry
+`MAP_VER 100` and the same internal name `w100`, and their height headers are
+byte-identical, which is why this read as "six copies of one scene" for a long
+time. The file name is the grid cell, not a copy id:
+
+```
+def.gbc:105  #define CHIPMAP "chipmap"                  // 地图切割名称
+def.gbc:107  #define TerrainLodSIZE 256
+def.gbc:108  #define WPOS2BPOS(s) (((s)+128000)/TerrainLodSIZE)
+def.gbc:109  #define BPOS2WPOS(s) ((s)*TerrainLodSIZE-128000)
+def.gbc:110  #define MAKEMAPID(ix,iy) ((ix)+(iy)*1000)   // 每块场景产生一个ID
+```
+
+and `ui/video/world.gbc::CheckWorldCenterPos` streams a
+`(2*maprs+1)^2` neighbourhood of tiles around the player, 600 m out:
+
+```
+id       = MAKEMAPID(ix+x, iy+y);
+mapname  = OnGetCopyName()+id;
+vRes     = m_i_FileVer.GetResByName(mapname);
+plod     = new MVTwLod;  plod.PerCreate(addv[1], addv[2], addv[3], ...);
+```
+
+So `intro517493` is ix=493, iy=517 (`id % 1000`, `id / 1000`), and the six
+shipped tiles are a **3 × 2 block**, ix 493..495 × iy 517..518 = **768 × 512 m**
+of one continuous world, at world coordinates x −1792..−1024, y 4352..4864.
+
+**The adjacency is measured, not assumed.** Mean |Δh16| across every shared edge
+is **0.01–1.01** units of 65,530 (≤ 30 mm), while the *reversed* pairing of the
+same two edges gives **1,209–4,770**. That is a 1,000× separation, so the grid
+direction (ix → +x, iy → +y) is a fact about the data, not a guess:
+
+| edge | forward | reversed |
+|---|---|---|
+| `intro517493` → `intro517494` (x) | 0.008 | 1,209 |
+| `intro517493` → `intro518493` (y) | 1.008 | 4,770 |
+
+`SaveMapData` writes to `RESPATH + OnGetCopyName() + "/" + mapname + ".zmap"`, so
+the path's directory is the *copy* (`intro`) and the file stem is
+`copy + MAKEMAPID` — which is exactly why every file is named `w100` inside and
+still distinct on disk.
 
 **They are also the six `intro/*.zmap` files, and that matters operationally.**
 Hashing those six paths resolves exactly the six map hashes:
@@ -1027,38 +1131,302 @@ wrapper tag) anywhere under `netpak/`, and resolves the hash back through
 cross-checks the hash-keyed walk against a path-keyed walk and fails loudly if
 they disagree.
 
-**Height field.** 12-byte header (`u16 2`, `u32 64176`, `u32 49864`, `u16
-0x4461`, identical in all six), then **129 × 258 bytes**, then a u32 trailer
-that is not crc32/adler32/sum. The grid is bytes, not `u16`: 45.3% of aligned
-`u16` pairs have high byte == low byte, where chance would give ~0.4% — the
-pairs are two adjacent cells that happen to be equal.
+**Height field — fully decoded.** 12-byte header, then **129 × 258 bytes**,
+then a u32 trailer. The header is `u32 0xFAB00002`, `f32 minz = -100.0`,
+`f32 maxz = 900.0`, identical in all six maps.
 
-129 × 258 is **two stacked 129×129 terrain patches**, matching
-`TerrainLodSIZE 256` at half resolution and the layer map's two 256×256 halves.
-Heights are `0..255` over `DEFWORLD_MINZ..DEFWORLD_MAXZ` = `-50..450`, so
-`z = -50 + v * 500 / 255`. Patch 0 is flat plains (values 12..41), patch 1 is
-mountains (0..255).
+The 129 × 258 block is **one 16-bit grid, not two 8-bit fields**: the first
+16,641 bytes hold the high byte of every vertex and the second 16,641 hold the
+|  |  |
+| --- | --- |
+low byte. `h16 = (plane1[i] << 8) | plane2[i]`, and
 
-That second patch nearly fooled a statistics-only read: its entropy is 7.95
-bits/byte and its median adjacent delta is 15, which looks like noise under
-every ordering tested. It is not — it renders as coherent relief, and the high
-entropy is **quantisation dithering**, which only appears where there is a
-gradient. The flat patch is smooth precisely because it has none. Rendering
-settled it where statistics could not.
+```
+z = minz + h16 * (maxz - minz) / 65530
+```
+
+The loader proves it. `chronotales.exe`'s `.zmap` record reader starts at
+`0x4ee4f9` and demands a record length of exactly **0x8212 = 33,298** =
+12 + 2·16,641 + 4, which is the length of every shipped record:
+
+```
+4ee4f9  cmp  dword [edi], 0xfab00002   ; tag -- compared, not merely written
+4ee591  cmp  dword [esp+0x10], 0x8212  ; exact record length
+4ee647  mov  dword [esi+0x134], 0x81   ; 129 columns
+4ee64d  mov  dword [esi+0x138], 0x81   ; 129 rows
+4ee662  mov  edx, [edi]                ; minz, read from header +4  -> [esp+0x30], [esp+0x38]
+4ee66d  fld  dword [edi]               ; maxz, read from header +8  -> ST0
+4ee66f  fcom dword [esp+0x30]          ; maxz < minz -> "SetHeightData minz>maxz err"
+4ee70f  fsub dword [esp+0x30]          ; ST0 = maxz - minz
+4ee728  fmul dword [0x6d17e8]          ; * 1.5260186e-05 = 1/65530
+4ee72e  fstp dword [esp+0x20]          ; scale = (maxz - minz) / 65530
+4ee725  imul ecx, ebp                  ; ecx = 129*129
+4ee73e  add  ecx, edi                  ; second cursor = first + 16,641
+4ee77b  mov  dh, byte [edi]            ; high byte
+4ee77d  mov  dl, byte [ecx]            ; low byte
+4ee77f  and  edx, 0xffff
+4ee78b  fild dword [esp+0x14]          ; h16
+4ee794  fmul dword [esp+0x20]          ; * scale
+4ee798  fadd dword [esp+0x38]          ; + minz
+4ee79c  fstp dword [eax-0x10]          ; vertex z
+```
+
+**The `fsub` is the step that is easy to miss.** `fmul [0x6d17e8]` multiplies by
+`1/65530`, so reading it as `z = h16 * (1/65530) + minz` gives a **1 metre** total
+range. The multiplier is a *precomputed* `(maxz − minz)/65530` in `[esp+0x20]`,
+built three instructions earlier from the two header floats; the `fadd` base in
+`[esp+0x38]` is `minz`. Both header floats are therefore live, exactly as the
+saver implies. The same routine also scales x and y: `x = col * ([esi+0x130] *
+1.00001)` and `y = row * (…)`, i.e. 2 m per cell (the `1.00001` at `0x6d17e4` is
+an anti-seam fudge).
+
+The reciprocal turns up in the saver at `0x4ee45a`: after clamping to
+`-100.01 .. 900.0` it computes `h16 = (h - minz) * 65.53` (`0x6d17d8`), writes
+the high byte to plane 1 and the low byte to plane 2, then the trailer --
+
+```
+4ee479  88 16   mov byte [esi], dl   ; dl = AH   -> plane 1
+4ee47d  88 07   mov byte [edi], al   ; al = low  -> plane 2
+4ee48f  89 2f   mov dword [edi], ebp ; trailer
+```
+
+65.53 × 1000 = 65,530, exactly the divisor the loader uses, so the header floats
+are **live data, not a comment**: the span really is 1000 m and the step really
+is **15.3 mm**.
+
+The trailer is a rolling hash, not crc32/adler32/sum. Verified on all six maps:
+
+```python
+h = 0
+for v in h16:
+    h = ((h << 1) ^ v) & 0xFFFFFFFF
+```
+
+**This reverses three earlier readings of this section.** (a) The second plane
+was called "unidentified coherent relief, probably a tangent-space normal map";
+it is the low byte — which is exactly why it spans 0..255, why it correlates
+with nothing (a low byte wraps every 256 units, i.e. every 3.9 m of height), and
+why `intro518495` shows a plateau at 201 over 20% of the grid (a genuinely flat
+area, where h16 is constant and so both bytes are constant). (b) The tag was
+called "write-only — nothing ever compares it"; there is a `cmp` at `0x4ee4f9`.
+(c) The grid was read as 8-bit over `-50..450`; that halves the relief and
+stair-steps every 3.9 m.
+
+**Independent confirmation from the scene data.** Under this mapping the terrain
+at every village prop is ≈ 0.00 m, and the props are authored at z = 0.
+`精灵小镇_木箱_Z` at (137.93, 211.19) has authored z = 0.000 and `height_at`
+returns **+0.060 m**; the four crates at x 131..136, y 210..213 land within
+±0.15 m. The 8-bit `-50..450` reading only *looked* right because the village
+happens to sit where the two mappings cross zero — it gets the village level by
+coincidence and the rest of the map wrong.
+
+Relief is therefore 72..124 m per map (was 36..62 m). Because the step is 15 mm
+there is no staircase left to hide, so both renderers decode 16-bit and the
+former two-pass tent blur (`Scene._smooth`, `render_scenes.smooth`) is now a
+no-op kept only as an escape hatch.
+
+**Large parts of a tile are an unpainted fill.** `h16 = 3273` — one single value —
+covers **39%** of `intro518493` and **19%** of `intro518495`, and no other value
+comes close (the next most common in `intro518493` has 86 cells against 6,458).
+It decodes to z = **−50.05 m**, i.e. 5 cm under `def.gbc:114
+#define DEFWORLD_MINZ -50`, so it is the editor's floor fill rather than painted
+terrain. This is what the "crater" in `intro518493`'s south-west actually is: a
+wide flat floor with a painted mound standing on it, not a bowl. It is also why
+those regions render as a dead-flat plateau — that is the data, not a decode
+artefact.
+
+
+Three independent facts pin **one tile** at 256 m square:
+
+* every scenery instance lands in `x 65..241, y 0..208` and every
+  `MAP_MODELDATA` placement in `x 91..181, y 30..64` — nothing reaches 256;
+* the layer map is 256 wide at 1 px/m, so a tile is 256 m across;
+* `TerrainLodSIZE 256` at half resolution gives 129 vertices per axis.
+
+(The old second bullet here said the layer map's lower half was "35% painted,
+i.e. padding" — wrong twice: it is 5.9% painted, not 35%, and it is layers 3–5,
+not padding. See the layer-map note below.)
+
+**World assembly — `World` in `tools/render_scene3d.py`.** Stitching is not a
+concatenation of images; three things have to be handled:
+
+1. **Heights** are trivial: tile *(ix,iy)* occupies grid `[x*128, x*128+128]` and
+   the shared edge row/col is duplicated, so the overlap must agree rather than
+   be appended. `World.seam_max` asserts it (2 units of 65,530).
+2. **Ground cannot be blended globally.** The six tiles do **not** share one
+   surface set: slot 1 is `沙地` in `intro517493` and `地表_路面007` in
+   `intro517494`, and only slot 0 (`地表_草地006`) is common to all six. So
+   `blend_ground(res)` is per tile and `World.bake_ground()` pastes the six
+   results into one 3072×2048 atlas (4 px/m). This also means a **1-cell step
+   in the ground is expected at every tile boundary** where the two tiles' paint
+   differs. That is authored data, not a stitching artefact, and the raw 1 m
+   weight map proves it: the boundary column differs from its neighbour by up to
+   **13× the local mean** (18.6 vs 1.4 at ix=494's y seam; 4.9 vs 0.5 and 6.8 vs
+   0.9 at the two x seams) while one of the six edges is *identical* (0.000).
+   The engine has six separate `MVTwLod` objects with six surface sets, so it
+   sees exactly the same edge. In the render it reads as a thin straight line
+   (3.9 RGB units against a 1.8 local mean).
+   `沙地` is the one layer with no shipped `surface/*.jpg`, so that tile's blend
+   renormalises over the five it has.
+3. **The v axis was inverted.** `obj_render` samples at `ty = (1-v)*h`, so
+   passing `v = y/world` (as the single-tile renderer did) mirrors the whole
+   ground field about its middle row. That was invisible while the ground was
+   "plausible grass"; it becomes obvious the moment six tiles are stitched and
+   the road network has to join up across them. Fixed to `1 - y/world_h`.
+
+`python tools/render_scene3d.py --world` renders the 768 × 512 m block
+(`world_intro_3d_tex_{oblique,plan,horizon}.png`); the rasteriser is square-only
+so the frame is cropped to the drawn content afterwards. `--check` now runs a
+`world-tiling` invariant as well: the names must decode to a hole-free 3 × 2
+rectangle, every shared edge must agree to ≤ 4 units while the reversed pairing
+must exceed 100, and props must land on the stitched surface as well as they do
+on a single tile (median 1.21 m either way, 38 of 39 rows; the 39th is a
+sentinel row at (0,0)).
+
+An earlier reading of this section called the second block a "mountain patch"
+and explained its entropy as quantisation dithering, then later called it
+"uninitialised noise". Both were wrong, and the second produced a visible bug:
+reading the blob as a **258-wide** grid transposes the field, so every terrain
+quad connected cells one row apart and the whole map rendered as a curtain of
+vertical spikes. The 129 × 129 two-plane reading is correct and both
+`tools/render_scene3d.py` and `tools/render_scenes.py` use it.
+
+
+**Scenery instances — solved from the client, not inferred.** `MAP_WIDGETDATA`
+is `[world name, decoration, …]`, and each decoration is
+
+```
+[int type, str name, str model path, str texture path, int, int count, bytes blob, int]
+```
+
+The blob is a 16-byte header of four `float32` followed by `count` records of
+**9 bytes**. The client's own reader, writer, snap and renderer agree on the
+layout:
+
+```
+FUN_004e1960  reader   blob must be 16 + 9*count
+FUN_004e16a0  writer   writes the same four floats and the same 9-byte records
+FUN_004e1660  snap     z = terrain(x,y) + dz
+FUN_004e1ed0  renderer size = scale byte / 16, facing from the direction pair
+```
+
+| bytes | field | conversion | constant |
+|---|---|---|---|
+| 0–1 | `x` | `× 0.01` → metres | `_DAT_006d0408` = 0.01 |
+| 2–3 | `y` | `× 0.01` → metres | |
+| 4–5 | `dz` | `× 0.01` → metres **above the terrain** | |
+| 6 | `dir_x` | `÷ 127` (signed) | `_DAT_006d158c` = 1/127 |
+| 7 | `dir_y` | `÷ 127` (signed) | |
+| 8 | `scale` | `× 0.0625` | `_DAT_006d1588` = 1/16 |
+
+`dz` is **signed** — the reader does `(int)(short)puVar10[2]` — and `FUN_004e1660`
+then makes the final z absolute by adding the terrain height. The direction
+pair is a unit vector; the renderer stores it with a negated x component to
+build the card's basis.
+
+**The four header floats are an animation parameter, not a size.** This is the
+one field that was wrong before. `FUN_004e1e80` transforms them like this:
+
+```
++0x74 = frame_delta * header[0] * 0.001
++0x78 = frame_delta * header[1] * 0.001
++0x7c = header[2]
++0x80 = header[3]
+```
+
+and `FUN_0044c560` returns elapsed **milliseconds** (`GetTickCount` minus the
+previous frame), so the first two become `dt_seconds × amplitude`. The result
+is handed to the renderer as a vec4 uniform (`FUN_004bdf40`) — it is the **wind
+sway** of grass and foliage. The data agrees: all nine shipped decorations use
+either all-zero or all-0.2, and the same asset (`精灵小镇_奇幻灌木001_Z`) carries
+0.2 in one tile and 0.0 in the next, so it is authored per placement group.
+
+Reading it as a scale shrank every grass, flower and shrub decoration to 20%.
+The models are authored at their natural size — the flower is 0.76 m tall, the
+shrub 1.73 m, the mushroom 1.31 m — so the instance's own scale byte is the
+whole story.
+
+A **version-1** record layout also exists in the client (14-byte stride, no
+`dz`, which defaults to −0.01 m); only version 2 ships.
+
+All nine decorations across the six tiles decode cleanly: 126 instances, the
+count field always matching the blob length, every instance inside its own
+256 m tile, and `dz` in −0.07…0.68 m. `tools/render_scene3d.py --check`
+asserts all of that.
+
 
 **Layer map.** `[100, 256, 512, pixels]` with 3 bytes per cell, **interleaved**
-(a planar reading is pure noise: adjacent-byte delta 255 vs 0 interleaved). For
-`w100` it is almost entirely two colours — `ff0000` above the midpoint,
-`000000` below — plus a small painted patch, i.e. the map is barely textured.
+(a planar reading is pure noise: adjacent-byte delta 255 vs 0 interleaved).
+
+Both 256×256 halves cover the same 256 m world at 1 px/m, and they are **not**
+"one map plus padding" — an earlier reading said the second half was only 35%
+painted and therefore padding, which was wrong. The runtime normalises a cell in
+the top half against the cell 256 rows below it: `FUN_004edb40` reads both, sums
+all six bytes (`*pB + pB[1] + pB[2] + *pA + pA[1] + pA[2]`) and rescales them to
+`0xff`. So **top R/G/B weight layers 0/1/2 and bottom R/G/B weight layers 3/4/5**
+— six weights for the six `MAP_DATAEX` layers, three channels each.
+
+That matters in practice: ignoring the bottom half throws away the road and
+stone layers. On `intro518494` the bottom half is only 34.8% painted, but it
+holds 450 cells of `ff0000` (layer 3 = `地表_路面002`) and 594 of `0000ff`
+(layer 5) — and layer 3 *is* the road network, invisible without it.
+
+The field is a **continuous RGB blend field** (22,370 distinct colours), not a
+palette index: the top half alone is 98% painted and dominated by `ff0000`
+(31,156 px), with gradients between. They are **weights, not an index**, which
+matters: picking the dominant channel per cell (the first implementation)
+collapses the anti-aliased edges into 6 m stair-steps, because the rasteriser
+binds one texture per triangle. The fix is to bake the blend once per scene:
+`Scene.bake_ground()` resamples each half to 2048² over the 256 m world, tiles
+each of the six layers at `GROUND_TILE` metres (48 px per 6 m tile — still finer
+than the render's own 0.18 m/pixel), and composites `Σ wᵢ·Lᵢ / Σ wᵢ` over all
+six, falling back to layer 0 where every weight is zero. Roads now have soft
+organic edges instead of blocks, and the road surface is actually the road
+texture.
+
+**Height quantisation — resolved, and it is not a problem.** The old note here
+said a byte is ~2 m over a 500 m range, so a "gentle" plain arrives as a
+staircase and both renderers tent-blurred the field twice to hide it. The step
+is actually 15.3 mm (16-bit over the header's 1000 m span), so the blur was
+compensating for a decoding error rather than for the data. It now defaults to
+zero passes. `terrain_color()`'s 5-band palette is still only used for the
+untextured fallback — as a multiplier on a ground texture it produced hard
+colour steps — so textured terrain keeps `height_tint()`.
+
+`MAP_DATAEX`'s six layers are `地表_草地006, 地表_草地008, 地表_草地007,
+地表_路面002, 地表_石03, 地表_草地100`, which `SysFileVer.var` resolves to
+`surface/dd72a041.jpg, 1e05658b.jpg, 8fc0afb5.jpg, 19fc32a5.jpg, 459577eb.jpg,
+de152742.jpg` — all present in the archive. That is why the rendered ground
+shows a road network crossing the grass without any road geometry existing.
+
 
 **Decorations.** Each is `[kind, res_name, model, texture, 0, n, blob, 0]` where
-the blob is `16 zero bytes + n × 9 bytes`. Each 9-byte instance is four `u16` in
-hundredths plus one `u8`; `x` and `y` decode to plausible world coordinates
-(65..237 × 7..208 for one grass scatter), `z` is **always 0** because the runtime
-derives it (`hz=GetHeightZ(x,y)+v[FIXMODEL_Z]`), the fourth `u16` runs to ~646 so
-it is half-degrees, and the trailing byte sits in 10..70. The last two are read
-off their ranges, not from code.
+the blob is a 16-byte header + `n × 9 bytes`. **Fully decoded from code**
+(Ghidra: reader `FUN_004e1960`, writer `FUN_004e16a0`, terrain snap
+`FUN_004e1660`, renderer `FUN_004e1ed0`, all in
+`E:\GBox2\src\CLIENT\3d\wold\GObj3dWidgetBsp.cpp`):
 
+```
+header: 4 x float32   per-scatter base scale (0.2 for flowers/grass, 0 = default)
+record (9 bytes):
+  u16  x        * 0.01  -> metres        (constant _DAT_006d0408 = 0.01f)
+  u16  y        * 0.01  -> metres
+  i16  dz       * 0.01  -> z offset; runtime z = terrainHeight(x,y) + dz
+  i8   dir_x    / 127   \ billboard direction pair — the renderer builds the
+  i8   dir_y    / 127   / ground quad from (dir_x/127, dir_y/127, -dir_x/127)
+  u8   scale    * 0.0625  (_DAT_006d1588 = 1/16; direction divisor 0x6d158c = 1/127)
+```
+
+This corrects the earlier range-based guess ("four u16 + one u8, half-degrees"):
+the third field is a *signed* z offset (mostly 0, so it looked like a zero u16
+pair), the fourth u16 is really two signed direction bytes, and the trailing
+byte is a scale in 1/16 units (values 0x0a..0x62 = 0.6..6.1). x/y decode to
+world coordinates 65..237 × 7..224 m, consistent with the MAP_MODELDATA
+placements on the same maps. The map name is the `"w100"` first element.
+
+`tools/zmap.py` parses the container end-to-end (tag + ZIP + varbin + instances)
+into `extracted/maps/scenes/intro_scenes.json`; `tools/render_scenes.py` draws
+the top-down layouts (`extracted/maps/intro*_layout.png`). The older
 `tools/map_decode.py` exports all six to `extracted/maps/`: JSON metadata, a
 greyscale height map, a hillshaded relief, the layer map as PNG, and the
 decoration and placement tables as CSV.
@@ -1088,6 +1456,7 @@ Views are hash-routed (`#t/itemtabedit`, `#maps`, `#assets`, …) so a table is
 linkable. Every figure displayed is computed from the generated data — the two
 `_manifest.json` files, `models/_index.json`, `gbc_index/data.json` — never
 hardcoded, so a count cannot drift from the data it describes.
+
 
 ### 4.9 `.caf` — character animation (Cal3D `CalCoreAnimation`) — **SOLVED**
 
@@ -1320,6 +1689,8 @@ model→clip binding.
 `ziptabedit.gbc` ("动作包定义表编辑", action-pack definition table; netpak payload
 `af3407ec`, 12 rows × 6 cols) is the missing model→clip map. Columns are
 `系统名 / 原始动作包 / 附加动作包 / 查找索引 / 附加动作名 / 替换动作`, and the rows
+|  |  |  |
+| --- | --- | --- |
 partition by `模板|人类男` (template: human male) and `模板|人类女` (human female):
 
 | 系统名 (system) | 附加动作名 (base clips) | 替换动作 (replacement) |
@@ -1346,11 +1717,55 @@ Three things follow, and they resolve most of the open question:
    rows reference **111 distinct** `附加动作名` clip names between them, so the
    manifest's 406 zips are roughly 3–4 files per name (LOD or variant sets).
 
-The remaining gap is now narrow and specific: the link from a **`系统名`
-(system) to a character's model GUID** is not in this table — `查找索引` holds
-only `模板|人类男` / `模板|人类女`, a template wildcard rather than a model id.
-That lookup must live in whichever table assigns a model to an NPC/player, so
-the next step is `npctabedit` / `peteditlist`, not more animation work.
+**The `系统名 → model` link is closed, and `ziptabedit` was the wrong place to
+look for it.** `ziptabedit` is **player-only** — 12 rows, six per gender, keyed
+|  |  |  |
+| --- | --- | --- |
+`模板|人类男` / `模板|人类女`. It never names a model because a player character
+has no single model; it is assembled from equipment parts. NPCs, monsters and
+mounts take a completely different path, and it is inline in `SysFileVer.var`:
+
+```
+npctabedit.模型 ──► SysFileVer[name] ──► "modle=,model/4428E5A6.cmz;
+                                          tex=怪物_守墓人_1_m,tex/36DF1AFD.jpg;
+                                          tex=怪物_守墓人_2_m,tex/F0CA0796.png;
+                                          action=,action/1062CC2C.zip"
+```
+
+One row carries the skeleton **and** the clip pack. `_D` ("dynamic") names are
+aliases that point straight at `action/<guid>.zip`; `_Z` ("static") names carry
+the full spec. Both name the same GUID, which is the built-in cross-check:
+**250 `_D`/`_Z` pairs, 0 disagreements** — that is what proves the spec parser is
+right rather than merely plausible.
+
+The player path resolves too, one hop further: `原始动作包` / `附加动作包` are
+themselves `SysFileVer` keys, and all 16 `标准动作` names
+(`人类_男_标准动作`, `…01`..`…06`, same for 女) map to `action/<guid>.zip`.
+All 24 pack references in `ziptabedit` resolve.
+
+Coverage over the shipped data:
+
+| | count |
+|---|---|
+| distinct `npctabedit.模型` | 481 |
+| with a `model/*.cmz` skeleton | 479 (2 have no spec at all) |
+| with an `action/*.zip` pack | 366 (115 are static props — wells, crates, signs) |
+| **skeleton actually shipped** | **1** |
+| **pack actually shipped** | **1** |
+| `ziptabedit` pack references | 24 (14 distinct names), all resolve, **0 shipped** |
+
+That single shipped actor is `骑宠_机甲摩托1阶_Z` → `model/B056501A.cmz` +
+`action/E41C7990.zip`, and the pack contains exactly `jumpdown, jumping,
+jumpstart, run, stand01` — the five `.caf` files that ship loose in
+`model/caf/`. Every `.caf` binds rig `b056501a`. So the retail client contains
+**one** complete animated character — the mech mount — and the rest of the
+animation system is intact but stripped. That is the whole story, and it
+explains why `stand01` (row 1's `替换动作` fallback idle) is the clip every
+`SetAniKind` call site reaches for.
+
+`tools/action_link.py` resolves both paths and fails if any `_D`/`_Z` alias
+disagrees → `extracted/tables/action_links.csv` (481 rows) and
+`extracted/tables/action_packs.csv` (24 rows).
 
 `tools/caf_decode.py` → `extracted/models/caf/*.json` (one per clip: header,
 `rig`, `rig_file`, and per-track `bone` / `n_keys` / `keys`, each key being
@@ -1359,6 +1774,109 @@ stored). `rig` is the `.cmz` JSON stem and `rig_file` is the name that skeleton
 currently has on disk (`b056501a` here, not `2682c5d5` — the stem is stale, see
 above). `tools/caf_decode.py check` is the byte-exact assertion;
 `tools/caf_validate.py --strict` is the regression test.
+
+**Rendering that actor.** `tools/render_anim.py` poses the rig per frame and
+rasterises it to `extracted/models/anim/` (five 8-frame filmstrips plus one
+large still per clip). Three things about it are worth recording, because each
+one was a silent bug rather than a format unknown:
+
+* **`render()` takes yaw/pitch in radians, not degrees.** `obj_render`'s own
+  entry point converts with `math.radians`; the animation renderer passed
+  degrees, so `cos(90.0)` was `cos(90 rad)` = −0.448 and the bike came out
+  rolled ~27° with the wheels off the ground. The tell was arithmetic, not
+  pixels: the two wheel centres are at world z ≈ 0.56 / 0.74 but landed at
+  screen y +0.57 / −0.63.
+* **`zoom` is a half-extent factor.** `scale = size*0.5*zoom/ext`, so `zoom=1.0`
+  fits `ext` into *half* the canvas. `fit="screen"` (new, opt-in) measures the
+  projected silhouette instead of the 3D bbox — the bbox diagonal over-pads a
+  4.05 × 1.28 × 2.35 m object — and `frame=(ox, oy, ext)` pins one camera across
+  every frame so an animation strip does not breathe.
+* **The part base is a vertex offset, not a face count.** `load()` was adding
+  `len(part_of)` (a per-face list) to each part's face indices, so parts 1–4
+  pointed 74+ vertices too far. `caf_frames.py` always did `base += nv`, which
+  is why the web viewer was correct while the rasteriser was not.
+
+**The scene camera looks down, and once looked up.** `render_scene3d.py`'s
+`view_transform()` packs the world into the frame `obj_render.render()` expects
+— which, for `yaw=0, pitch=0, up="z"`, is `(right, away, up)`, *not*
+`(right, up, away)`: `obj_render.rot()` maps its input `(p_x, p_y, p_z)` to
+view space as `(p_x, p_z, p_y)`. An earlier version packed
+`depth = z·cos(tilt) + y·sin(tilt)` and `up = z·sin(tilt) − y·cos(tilt)`, which
+put **+z away from the camera and −y up the screen** — a camera below the
+ground looking up. The terrain was then the nearest surface in every
+direction, so it won the z-buffer everywhere: the village buildings were
+invisible, every tree showed only the underside of its canopy, and a
+"terrain vs terrain+building" pixel diff produced a branch-only silhouette
+that read as a missing-model bug. The correct packing is
+`depth = y·sin(tilt) − z·cos(tilt)`, `up = y·cos(tilt) + z·sin(tilt)`, with
+`tilt` measured from the zenith (12 → plan, 55 → bird's-eye, 72 → horizon).
+`camera_check` in `render_scene3d.py --check` asserts that a point 5 m above
+the ground is both nearer to the camera and higher on screen than the ground
+beneath it — the old transform fails the first of those.
+
+**Textures come from the spec, not from the mesh.** The `.cmz` has no material
+table, but the SysFileVer row carries the binding:
+`modle=,model/B056501A.cmz;tex=机甲摩托_轮子,tex/3F736FBC.jpg;…`. Skin parts are
+named after those materials (`机甲摩托_车身`), and the four `轮子` entries are
+the shared material for `前轮`/`后轮`. All five parts bind, 2,932/2,932 faces
+textured, UVs are per-vertex and already in `0..1`. `render_anim.py --check` is
+the fast invariant (5/5 textures, UV range, no out-of-range face index).
+
+### 4.10 Particle effects — `netpak/effect/*.txt`
+
+The engine's effect format is **plain GBK text**, not a binary container, and it
+is self-describing: the first line is `//Particle 1.00 for GBoxII`. Only three
+files ship (`42da2fff`, `df3269c5`, `f30b8336`, 2.5–4.4 KB each) and two of them
+are literally `m_sName='Test'` — engine demo scenes. `SysFileVer.var` registers
+**1,777** `effect/...` paths (skill hits, mount trails, `quest_complete`,
+`levelup`, `resurrect`, per-locale variants `_CN/_EN/_JP/_VN`), and hashing a
+sample of them against the archive finds nothing: the real effect library is
+referenced but not shipped. What the client does ship is the *format*, which is
+enough to read any effect the server ever names.
+
+Grammar: `key=value` lines, `//` comments, and `:Block` headers. Nesting is by
+tab depth — a block at depth *i* owns properties at depth ≥ *i* and children at
+depth > *i* (the elements' own properties sit at the same depth as the header,
+which is the one trap in the parser).
+
+```
+//Particle 1.00 for GBoxII
+m_sName='Test'                 m_nTotalTime=-1      m_sSndFileName='0'
+:Atom                                             element: billboard particle
+    m_sTextureName='smoke123.jpg'   m_nShowMode=2   m_nWorldSpace=0
+    m_nBillboardKind=1  m_nAlginOrg=4  m_fMass=1  m_fSpeedStretch=0
+    m_vAtomScale=(3,(0.01,0.64),(0.56,0.73),(1,0.9))     keyframed
+    m_vAtomRed=1  m_vAtomGreen=1  m_vAtomBlue=1
+    m_vAtomAlpha=(3,(0.02,0.03),(0.42,0.21),(0.81,0.48),(0.99,0.02))
+    m_fFrameBegin=0  m_fFrameEnd=1000
+    :Emitter                                          behaviour blocks
+        m_nEmitRate / m_nChanceToEmit / m_nEmitDuration / m_nDelay / m_nNumLoops
+        m_vPosition=v3(0,0,1)   m_vDirection=v3(0,0,-1)   m_nDirKind=0
+        m_fVelocity  m_fAngle  m_nRotoKind  m_fRoll=(2,-90,90)
+        m_fParticleLife  m_fStartSize  m_fStartHeight
+    :Gravity   m_vGravity=v3(0,1,1.5)
+:Ribbon                                            element: trail
+    m_sTextureName='ray31.jpg'  m_nOutTimer=1000  m_fSpeedScale=1800
+    :R_Twist   m_sBTag='w'  m_vSOff=v3(0,-0.5,0)  m_fRWidth=2  m_fRad=0.05
+```
+
+Value forms: `'text'`, bare int/float, `v3(x,y,z)`, `(n, v1…vn)` flat tuple, and
+`(n,(t,v)×n)` — a piecewise-linear curve over normalised time. Curves are how
+scale, colour and alpha are animated; `m_fFrameEnd=1000` says the atom lives on
+a 1000-frame timeline.
+
+Two element types (`Atom`, `Ribbon`) and eight behaviour blocks
+(`Emitter`, `Roto`, `Gravity`, `GWell`, `ECircle`, `Vortex`, `Snd`, `R_Twist`)
+cover all three files. `m_sBTagName` / `m_sBTag` bind a block to a skeleton
+attachment point — the same `Bip01`-space sockets the `.cmz` `MAP1` chunk
+lists, which is how a trail follows a weapon.
+
+The three shipped effects reference `SoftFlare.jpg`, `GlowBlue.jpg` (present
+next to them in `effect/`), and `HEIWU.png`, `HEIWU2.png`, `ray31.jpg`,
+`smoke123.jpg`, `mysterySmoke2.jpg`, `specks_additive.jpg` (absent).
+
+`tools/effect_ini.py` → `extracted/netpak/effect/_parsed.json`, with a summary
+of elements, behaviours and textures per file.
 
 ---
 
@@ -1380,6 +1898,12 @@ tools/varbin_identify.py   blob -> game table: column count + field-type signatu
                            one-to-one assignment (exact/signature/unshipped/map)
 tools/varbin_tables.py     exports the 42 identified tables to extracted/tables/*.csv
 tools/map_decode.py        the 6 .zmap map payloads -> extracted/maps/ (JSON, PNG, CSV)
+tools/render_scenes.py     top-down scene layouts (heightmap + deco markers) -> PNG
+tools/render_scene3d.py    textured 3D scene: terrain + ground splat + instanced
+                           props + placements, three cameras -> extracted/maps/*_3d*.png
+tools/effect_ini.py        particle effect .txt -> JSON (elements, behaviours, textures)
+tools/action_link.py       model -> skeleton + action pack, both selection paths
+                           (NPC spec / player template) -> extracted/tables/action_*.csv
 tools/build_explorer.py    one static page over every dataset -> extracted/explorer/
 tools/varbin_solve.py      superseded: the old positional width-table solver
 tools/tabedit_schema.py    extracts all 43 table schemas from tabedit/*.gbc
@@ -1562,6 +2086,7 @@ panels, 8,629 methods, 7,737 members, 428 registered interfaces, 16,272 user-vis
 strings (8,720 of them `@"…"`), 282 `csvr::call` server-RPC sites, 158 enums.
 
 ---
+
 
 ## 6. Notes / loose ends
 

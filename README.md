@@ -22,11 +22,11 @@ specification and findings log. This README is only an index.
 | `.gbc` script source (uncompiled GBK DSL, 235 files) | solved |
 | `varbin` entity database (48 blobs, 19,640 records) | solved (byte-exact) |
 | `varbin` blob → game table (42 tables, 19,634 rows exported) | 42 / 48 (37 editors + 5 editor-less) |
-| `varbin` map payloads → `.zmap` scenes (6 maps, height + layers + placements) | solved |
+| `varbin` map payloads → `.zmap` scenes (6 tiles = one 768 × 512 m world block; height + layers + placements + scenery) | solved |
 | `.53wf` mesh geometry | solved |
 | `.cmz` skeleton + bind pose | solved |
 | `.cmz` `sbus` skinned geometry + index buffer | solved |
-| `.caf` character animation (Cal3D `CalCoreAnimation`, 5 clips) | solved (byte-exact); model → clip binding still open |
+| `.caf` character animation (Cal3D `CalCoreAnimation`, 5 clips) | solved (byte-exact); model → clip binding solved — 481 NPC models, 366 name an action pack, and the alias cross-check pins the parser (`tools/action_link.py`); only `骑宠_机甲摩托1阶_Z` ships both a skeleton and a pack, so it is the one end-to-end test case |
 | `SysFileVer.var` asset registry (9,975 records) | solved |
 | Packer manifest (`0xBE119407`-free `.var`, seed 100) | solved — holds the pack's intended file list |
 | Texture path convention (`model/<GUID>.fw3`, `tex/<GUID>.<ext>`) | solved |
@@ -112,8 +112,19 @@ python tools/caf_decode.py               # .caf clips -> extracted/models/caf/*.
 python tools/caf_decode.py check         # assert byte-exact, all 5 clips
 python tools/caf_validate.py --strict    # rig/structural regression test
 
+# maps
+python tools/map_decode.py               # 6 .zmap maps -> extracted/maps/
+python tools/zmap.py intro518494         # decode one .zmap scene, all sections
+
+# composed scene renders (terrain + scenery + fixed placements, textured)
+python tools/render_scene3d.py intro518494            # full tile, 3 angles
+python tools/render_scene3d.py intro518494 --close    # crop to the props
+python tools/render_scene3d.py --world                # stitch all six tiles
+python tools/render_scene3d.py --check                # 4 invariants, exit 1
+python tools/render_scenes.py            # flat top-down map of every scene
+
 # everything at once
-python tools/check_all.py                # 14 invariants, exit 1 on any failure
+python tools/check_all.py                # 18 invariants, exit 1 on any failure
 ```
 
 All paths are relative to the repo root.
@@ -122,8 +133,20 @@ All paths are relative to the repo root.
 
 `extracted/explorer/index.html` is one static page over everything above: the 42
 tables with their real column names, the 9,975 asset records, the six decoded
-maps with height and terrain previews, the mesh and texture galleries, and the
-script index.
+maps with height and terrain previews (led by `extracted/maps/world_intro_layout.png`,
+the six tiles stitched into one 768 × 512 m world), the mesh and texture
+galleries, and the script index.
+
+The composed 3D scene renders land next to them and are browsable from the same
+Maps view: `extracted/maps/<tile>_3d_tex_{oblique,plan,horizon}.png` per tile,
+`--close` for a crop that frames the props, and `world_intro_3d_tex_*.png` for
+the stitched block.
+
+Two CSVs in `extracted/tables/` are **derived cross-references**, not decoded
+varbin payloads — `action_links.csv` (481 NPC models → action packs) and
+`action_packs.csv` (24 player pack references). They are browsable and marked
+with a `derived` chip, but they are excluded from the 42-table / 19,634-row
+payload count that `check_all.py` pins.
 
 It has no build step, no dependencies and no server — **double-click it**. Data
 is delivered as `window.__X = …` through injected `<script>` tags rather than

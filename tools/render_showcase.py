@@ -104,7 +104,7 @@ def main():
     sheet = Image.new("RGB", (W, H), (12, 13, 17))
     dr = ImageDraw.Draw(sheet)
     try:
-        font = ImageFont.truetype("C:/Windows/Fonts/consola.ttf", 15)
+        font = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 15)
         big = ImageFont.truetype("C:/Windows/Fonts/consolab.ttf", 22)
         small = ImageFont.truetype("C:/Windows/Fonts/consola.ttf", 12)
     except Exception:

@@ -73,6 +73,11 @@ def build_tables():
             "title": info.get("editor_title") or "",
             "confidence": info.get("confidence") or "",
             "synthetic": bool(info.get("synthetic")),
+            # a CSV in tables/ that no varbin blob claims is a cross-reference
+            # this project derived (action_links.csv, action_packs.csv), not a
+            # decoded payload -- it must not inflate the varbin table count
+            # that check_all.py pins at 42.
+            "derived": path.name not in by_file,
             "records": len(rows),
             "columns": len(cols),
         })
@@ -162,12 +167,32 @@ def count_meshes():
     }
 
 
+TILE_IDS = [517493, 517494, 517495, 518493, 518494, 518495]
+
+
+def tile_paths():
+    """hash -> (path, ix, iy).  MAKEMAPID(ix,iy) = ix + iy*1000 (def.gbc:110),
+    so the file stem of a .zmap is its grid cell, not a copy id."""
+    import gpak
+    out = {}
+    for mid in TILE_IDS:
+        path = f"intro/intro{mid}.zmap"
+        out[f"{gpak.hash_name(path):08x}"] = (path, mid % 1000, mid // 1000)
+    return out
+
+
 def build_maps():
     out = []
+    tiles = tile_paths()
     for f in sorted(MAPS.glob("*.json")):
         m = json.load(open(f, encoding="utf-8"))
+        path, ix, iy = tiles.get(m["blob"], ("", None, None))
         out.append({
             "blob": m["blob"],
+            "path": path,
+            "ix": ix,
+            "iy": iy,
+            "id": ix + iy * 1000 if ix is not None else None,
             "map_name": m.get("map_name", ""),
             "version": m.get("version"),
             "height": m.get("height", {}),
@@ -195,9 +220,13 @@ def main():
     stats = {
         "entries": entries,
         "named": named,
-        "tables": len(tables),
-        "editors": sum(1 for t in tables if not t["synthetic"]),
-        "table_rows": sum(t["records"] for t in tables),
+        # varbin payloads only: the two derived cross-reference CSVs in
+        # tables/ (action_links, action_packs) are not varbin tables
+        "tables": sum(1 for t in tables if not t["derived"]),
+        "editors": sum(1 for t in tables
+                       if not t["synthetic"] and not t["derived"]),
+        "table_rows": sum(t["records"] for t in tables if not t["derived"]),
+        "xref_tables": [t["id"] for t in tables if t["derived"]],
         "assets": assets.get("count", 0),
         "maps": len(maps),
         "scripts": count_scripts(),
@@ -212,14 +241,35 @@ def main():
     (OUT / "index.html").write_text(PAGE, encoding="utf-8")
 
     s = stats["scripts"]
-    print(f"tables   {len(tables)} ({stats['table_rows']:,} rows, "
-          f"{stats['editors']} with a shipped editor)")
+    print(f"tables   {stats['tables']} ({stats['table_rows']:,} rows, "
+          f"{stats['editors']} with a shipped editor)"
+          + (f"  [+{len(stats['xref_tables'])} derived: "
+             f"{', '.join(stats['xref_tables'])}]" if stats['xref_tables'] else ""))
     print(f"assets   {stats['assets']:,}")
     print(f"maps     {stats['maps']}")
     print(f"meshes   {meshes.get('wf', 0)} files / {meshes.get('submeshes', 0)} "
           f"submeshes, {meshes.get('cmz', 0)} skeletons")
     print(f"scripts  {s.get('files', 0)} files, {s.get('lines', 0):,} lines")
     print(f"archive  {named}/{entries} filenames recovered")
+    # every image the Maps view references must exist, or the page shows a
+    # broken frame and nothing tells you.  The 3D renders are keyed by the
+    # tile STEM (from the map path) while the relief/layer previews are keyed
+    # by the archive HASH, so this catches mixing the two up.
+    bad = []
+    for m in maps:
+        stem = (m.get("path") or "").rsplit("/", 1)[-1]
+        stem = stem[:-5] if stem.endswith(".zmap") else stem
+        for tag in ("oblique", "plan", "horizon"):
+            f = MAPS / f"{stem}_3d_tex_{tag}.png"
+            if not f.exists():
+                bad.append(f.name)
+        for tag in ("relief", "layer"):
+            if not (MAPS / f"{m['blob']}_{tag}.png").exists():
+                bad.append(f"{m['blob']}_{tag}.png")
+    if not (MAPS / "world_intro_layout.png").exists():
+        bad.append("world_intro_layout.png")
+    print(f"map imgs {len(maps) * 5 + 1} referenced, missing {len(bad)}"
+          + (f": {bad}" if bad else ""))
     print(f"wrote    {OUT / 'index.html'}")
 
 
@@ -298,6 +348,7 @@ tbody tr:hover{background:var(--panel2)}
 .chip.exact{border-color:var(--accent2);color:var(--accent2)}
 .chip.signature{border-color:var(--warn);color:var(--warn)}
 .chip.unshipped{border-color:#a06ac0;color:#b98ad4}
+.chip.derived{border-color:var(--warn);color:var(--warn)}
 .maps{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));
   gap:16px}
 .map{background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -533,8 +584,8 @@ async function renderTable(id){
   const d = await tableData(id);
   const rows = filterRows(d.columns, d.rows);
   const bar = el("div","bar");
-  const chip = el("span","chip " + t.confidence, t.confidence);
-  bar.appendChild(chip);
+  if (t.derived) bar.appendChild(el("span","chip derived","derived"));
+  else bar.appendChild(el("span","chip " + t.confidence, t.confidence));
   if (t.blob) bar.appendChild(el("span","kv", "varbin " + t.blob));
   m.appendChild(bar);
   m.appendChild(pager(rows.length));
@@ -558,9 +609,44 @@ function renderMaps(){
   const m = $("#main"); m.textContent = "";
   m.appendChild(el("h2",null,"Maps"));
   m.appendChild(el("p","lede",
-    "Six .zmap scene documents. Each is the layout the scene editor writes: a "+
-    "height field, a terrain-type map, six texture layers, and the decoration "+
-    "and model placements. All six are copies of the same scene, w100."));
+    "Six .zmap scene documents — but not six maps: each file is one 256 m "+
+    "TILE of a single world. def.gbc defines MAKEMAPID(ix,iy) = ix + iy*1000 "+
+    "and world.gbc streams a (2*maprs+1)\u00b2 neighbourhood of tiles around "+
+    "the player, so the file stem is the grid cell. These six are a 3\u00d72 "+
+    "block (ix 493\u2013495, iy 517\u2013518) = 768\u00d7512 m of one world, which is "+
+    "why every file is named w100 inside and still distinct on disk. Their "+
+    "heights agree across every shared edge to \u226430 mm."));
+  const wl = el("div","map");
+  const wlImg = el("img");
+  wlImg.src = "../maps/world_intro_layout.png";
+  wlImg.alt = "stitched world layout";
+  wlImg.style.width = "100%";
+  wl.appendChild(wlImg);
+  m.appendChild(wl);
+  // the composed 3D renders: terrain + scenery instances + fixed placements,
+  // textured, one oblique/plan/horizon triple per tile and one per world.
+  // They are named after the tile STEM (intro517495), not the archive hash
+  // the relief/layer previews use, so take it from the map path.
+  const stemOf = mp => (mp.path || "").split("/").pop().replace(/\.zmap$/, "");
+  const triples = [["world_intro", "stitched world"]];
+  for (const mp of M.maps) triples.push([stemOf(mp), mp.blob]);
+  const r = el("div","maps");
+  for (const [stem, label] of triples){
+    const c = el("div","map");
+    const imgs = el("div","imgs");
+    for (const [tag, alt] of [["oblique","oblique"],["plan","plan"],["horizon","horizon"]]){
+      const a = el("a"); a.href = "../maps/" + stem + "_3d_tex_" + tag + ".png";
+      const img = el("img");
+      img.src = "../maps/" + stem + "_3d_tex_" + tag + ".png";
+      img.alt = label + " " + alt; img.loading = "lazy";
+      a.appendChild(img); imgs.appendChild(a);
+    }
+    c.appendChild(imgs);
+    c.appendChild(el("h4", null, label + " — textured 3D"));
+    c.appendChild(el("div","m", "oblique · plan · horizon — click for full size"));
+    r.appendChild(c);
+  }
+  m.appendChild(r);
   const g = el("div","maps");
   for (const mp of M.maps){
     const c = el("div","map");
@@ -571,9 +657,14 @@ function renderMaps(){
     i2.alt = "terrain layers"; i2.loading = "lazy";
     imgs.appendChild(i1); imgs.appendChild(i2); c.appendChild(imgs);
     const b = el("div","body");
-    b.appendChild(el("h4",null, mp.map_name + "  ·  " + mp.blob));
+    b.appendChild(el("h4",null,
+      (mp.path || mp.map_name) + "  ·  " + mp.blob));
     const mm = el("div","m");
     mm.innerHTML =
+      (mp.id !== null && mp.id !== undefined
+        ? "tile <b>ix " + mp.ix + " · iy " + mp.iy + "</b> (id " + mp.id +
+          ") · world name <b>" + mp.map_name + "</b><br>"
+        : "") +
       "version <b>" + mp.version + "</b> · height <b>" + mp.height.width +
       "×" + mp.height.height + "</b> (" + (mp.patches.count||2) + " patches)<br>" +
       "terrain <b>" + mp.layer.width + "×" + mp.layer.height + "</b> · " +
