@@ -64,6 +64,23 @@ CHECKS = [
     Check("varbin-identify", ["tools/varbin_identify.py"],
           r"identified 42/48 payloads",
           why="one-to-one editor assignment; 42 of 48 payloads are tables"),
+    Check("varbin-writer", ["tools/varbin_write.py", "check"],
+          r"48/48 payloads re-encode byte-exactly",
+          forbid=r"FAIL",
+          why="the encoder implements the client's own tag dispatch, recovered by "
+              "correlating every (tag, value) pair across all 48 payloads: the u8 "
+              "array tag never exceeds len 66, the u32 tag starts at exactly 255, "
+              "and the u8 integer tag never carries a value below 16. A wrong "
+              "boundary re-encodes a payload to different bytes"),
+    Check("zmap-writer", ["tools/zmap_write.py", "check"],
+          r"6/6 maps round-trip",
+          forbid=r"FAIL",
+          why="a .zmap is rebuilt from its decoded tree: the payload must come back "
+              "byte-identical, the height record must satisfy every constraint the "
+              "loader at 0x4ee4f9 enforces (0x8212 length, -100/900 header, rolling "
+              "-hash trailer), and the rebuilt container must reparse to the same "
+              "scene. Only the deflate stream differs, because it came from a 2013 "
+              "zlib build"),
     Check("tables", ["tools/varbin_tables.py"],
           r"42 tables, 19,634 rows",
           why="exactly 42 tables; 43 means a stale CSV survived a re-identification"),

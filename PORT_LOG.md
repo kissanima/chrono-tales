@@ -4,6 +4,35 @@ Handoff log. Newest entry on top. Keep each entry under 20 lines.
 
 ---
 
+## 2026-10-31 (15) — write path exists: varbin encoder + .zmap writer
+
+**Status:** DONE
+
+**What was done:** First write path for map data (analysis was complete, authoring
+was not).
+* `tools/varbin_write.py` — encoder. The reader is lossy (`0x12`/`0x20`→int,
+  `0x40`/`0x41`→list, `0x30`/`0x31`→str), so the *dispatch* rule was recovered
+  from every (tag,value) pair across all 48 payloads: int 0..15 = tag is the
+  value, 16..255 `0x10`, 256..65535 `0x11`, else `0x12`; `0x40` below len 255,
+  `0x41` at/above. **48/48 byte-exact.** Rejects negative ints and 64-bit tags.
+* `tools/zmap_write.py` — `encode_height` (header + two 8-bit planes + recomputed
+  rolling-hash trailer) + container re-wrap keeping the original DOS time,
+  `5554 0500 07` extra and ext attrs. **6/6 payload-exact, CRC + reparse
+  identical.** `demo` raises one cell 500 h16 (7.63 m), re-reads: exactly 1 cell
+  differs, trailer valid.
+* Deflate is NOT reproducible (2013 zlib; no level/strategy in 1.3.1 matches,
+  sizes differ both ways). Payload-identical, not file-identical — documented.
+* GPAK_FORMAT §4.2 (dispatch table) + §4.7 (writer). check_all 18 → 20; both new
+  checks verified to FAIL on injection.
+
+**Next Steps:** `export_web.py` → `extracted/web/` is the parallel agent's roaming
+client (three.js, WASD, `height.js`). Do not duplicate. Open step: mutate a scene
+(move a prop / paint a layer) and have that client load the result.
+
+**Blockers:** None. Suite 20/20.
+
+---
+
 ## 2026-10-31 (14) — every open item closed; the last three TODOs were stale
 
 **Status:** DONE

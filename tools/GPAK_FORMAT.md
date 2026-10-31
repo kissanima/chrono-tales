@@ -333,11 +333,11 @@ encryption removed** (see [`SYSFILEVER.md`](SYSFILEVER.md)). The tag really is a
 | `0x00`–`0x0F` | small int; the value *is* the tag |
 | `0x10` | `u8` |
 | `0x11` | `u16` |
-| `0x12` | `i32` |
+| `0x12` | `i32` in the reader; in practice `u32` — values run to `0xFFFFFFFF` |
 | `0x13` | `f32` |
-| `0x14` / `0x15` / `0x21` | `i64` |
+| `0x14` / `0x15` / `0x21` | `i64` (never used by any shipped payload) |
 | `0x16` | vec3, three `u32` |
-| `0x20` | `u32` |
+| `0x20` | `u32` (never used by any shipped payload) |
 | `0x30` | empty string, no payload at all |
 | `0x31` | `u32 charCount` + `charCount*2` bytes UTF-16LE, **no checksum** |
 | `0x32` | `u32 len` + `len` raw bytes |
@@ -348,6 +348,38 @@ encryption removed** (see [`SYSFILEVER.md`](SYSFILEVER.md)). The tag really is a
 Compared with the `.var` form there is no seed, no rolling XOR key, no string
 checksum, no array trailer, and `0x32` blobs are not dword-padded. `tools/varfile.py`
 reads both shapes; `tools/varbin_tree.py` drives the varbin side.
+
+**Which tags the writer actually chooses.** The table above is the reader's
+grammar; it is lossy, because several tags decode to the same Python type
+(`0x12`/`0x20` → int, `0x40`/`0x41` → list, `0x30`/`0x31` → str). A byte-exact
+writer needs the *dispatch* rule, which is not in the reader — it was recovered
+by correlating every (tag, value) pair across all 48 payloads:
+
+| value | tag | observed range |
+|---|---|---|
+| `None` | `0xFF` | 32,459 occurrences |
+| int `0..15` | `0x0n`, value **is** the tag | 0–15 exactly, never wider |
+| int `16..255` | `0x10` | never carries a value below 16 |
+| int `256..65535` | `0x11` | max 64,700 |
+| int else | `0x12` | min 86,900, max `0xFFFFFFFF` |
+| float | `0x13` | 53,828 occurrences |
+| 3-tuple | `0x16` | 2,301, always length 3 |
+| `""` | `0x30` | never carries a length field |
+| str | `0x31` | 1–94 chars, never empty |
+| bytes | `0x32` | 25 B – 393,216 B |
+| list, len < 255 | `0x40` | max length seen 66 |
+| list, len ≥ 255 | `0x41` | min length seen exactly 255 |
+
+`0x14`/`0x15`/`0x20`/`0x21`/`0x33`/`0x50`/`0x51` **never appear** in any of the
+48 payloads. The boundaries are measured, not assumed — and they are tight: the
+`0x41` tag starts at exactly 255, so writing `0x40` at 255 changes the bytes.
+
+`tools/varbin_write.py` implements these rules and reproduces **48/48 payloads
+byte-exactly**, including the six `.zmap` documents. That round-trip is the
+`varbin-writer` invariant. Two things it refuses rather than guesses: negative
+integers (nothing decodes below 0, so the client's sign convention is
+unobserved — they are written as `0x12` two's complement) and any value needing
+a 64-bit tag.
 
 **All 48 payloads parse to their exact last byte** — 10,104,187 bytes holding
 **19,640 records**. Each payload is one table: every record in it has the identical
@@ -1431,6 +1463,29 @@ the top-down layouts (`extracted/maps/intro*_layout.png`). The older
 greyscale height map, a hillshaded relief, the layer map as PNG, and the
 decoration and placement tables as CSV.
 
+**Writing one back.** `tools/zmap_write.py` rebuilds a `.zmap` from its decoded
+tree: `encode_height` regenerates the 33,298-byte record from a u16 grid
+(header, two 8-bit planes, recomputed rolling-hash trailer), `varbin_write`
+re-encodes the document, and the result is re-wrapped as `0x602376D7` + a zip
+whose only entry is `varbin`. The entry's name, DOS timestamp, `55 54 05 00 07`
+extra field, external attributes and version fields are copied from a template
+rather than regenerated — they are packer artefacts, not format.
+
+The **payload** round-trips byte-for-byte (6/6 maps) and the rebuilt container
+reparses to the same scene. The **compressed stream** does not, and cannot: the
+shipped files were deflated by a 2013 zlib build, and no level or strategy in
+zlib 1.3.1 reproduces those bytes. The sizes disagree in both directions
+(31,124 vs 31,414 on `intro517493`), so it is a different compressor, not a
+different setting. A rewritten `.zmap` is therefore not byte-identical to the
+original as a *file*; the `zmap-writer` invariant asserts payload identity, CRC
+identity and decode identity instead of pretending otherwise.
+
+The edit path is `zmap_write.py edit IN OUT --raise-cell X,Y,UNITS`. `demo`
+proves the loop end to end: it raises one cell by 500 h16 units (7.63 m),
+writes the file, reads it back, and reports that **exactly one** cell differs
+and the trailer is valid. That is the first working write path for map data —
+the archive writer (`gpak_write.py`) and the map writer now both exist.
+
 ### 4.8 `extracted/explorer/` — one page over everything
 
 `tools/build_explorer.py` reads the outputs of every other stage and emits a
@@ -1892,6 +1947,10 @@ tools/propagate_names.py   #include-graph filename propagation
 tools/apply_names.py       rename already-extracted unknown/* files once their
                            hash has a path (avoids re-extracting 88 MB)
 tools/varfile.py           `.var` + `varbin` tagged-tree decoder (both modes)
+tools/varbin_write.py      `varbin` encoder: the client's tag dispatch rules,
+                           48/48 payloads byte-exact (`check`)
+tools/zmap_write.py        `.zmap` writer + terrain-cell edit; payload-exact,
+                           container semantically identical (`check` / `demo`)
 tools/varbin_tree.py       CLI: check | show | schema | csv  (tagged-tree view)
 tools/varbin_extract.py    entity DB: tokens | text | keys (label->value cross-tab)
 tools/varbin_identify.py   blob -> game table: column count + field-type signature,

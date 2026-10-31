@@ -23,6 +23,7 @@ specification and findings log. This README is only an index.
 | `varbin` entity database (48 blobs, 19,640 records) | solved (byte-exact) |
 | `varbin` blob → game table (42 tables, 19,634 rows exported) | 42 / 48 (37 editors + 5 editor-less) |
 | `varbin` map payloads → `.zmap` scenes (6 tiles = one 768 × 512 m world block; height + layers + placements + scenery) | solved |
+| **Write** path: `varbin` encoder + `.zmap` writer | solved — 48/48 payloads re-encode byte-exactly; a map round-trips payload-exact and an edited terrain cell survives the trip. Only the deflate stream differs (2013 zlib vs 1.3.1) |
 | `.53wf` mesh geometry | solved |
 | `.cmz` skeleton + bind pose | solved |
 | `.cmz` `sbus` skinned geometry + index buffer | solved |
@@ -115,6 +116,12 @@ python tools/caf_validate.py --strict    # rig/structural regression test
 # maps
 python tools/map_decode.py               # 6 .zmap maps -> extracted/maps/
 python tools/zmap.py intro518494         # decode one .zmap scene, all sections
+
+# writing maps back (the only write path for map data)
+python tools/varbin_write.py check       # 48/48 payloads re-encode byte-exactly
+python tools/zmap_write.py check         # 6/6 maps round-trip: payload + decode
+python tools/zmap_write.py demo          # edit one cell, prove exactly one changed
+python tools/zmap_write.py edit in.zmap out.zmap --raise-cell 64,64,500
 
 # composed scene renders (terrain + scenery + fixed placements, textured)
 python tools/render_scene3d.py intro518494            # full tile, 3 angles
