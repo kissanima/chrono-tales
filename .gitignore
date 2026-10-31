@@ -14,6 +14,8 @@ npgboxruner.dll
 
 # Agent workspace state (local only)
 .workbuddy-ai/
+.workbuddy/
+.wbapp_*.genie
 
 # Python
 __pycache__/
